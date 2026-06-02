@@ -1,0 +1,37 @@
+# Secrets and Environment Variables
+.env
+.env.local
+.env.development
+.env.production
+
+# Python runtime and caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local Database Files
+*.db
+*.sqlite3
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Optional logs
+*.log
+
+# Optional coverage reports
+.coverage
+htmlcov/
