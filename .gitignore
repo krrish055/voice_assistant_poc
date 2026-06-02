@@ -35,3 +35,4 @@ Thumbs.db
 # Optional coverage reports
 .coverage
 htmlcov/
+node_modules
