@@ -137,8 +137,10 @@ const VoiceConsole: React.FC = () => {
         <div style={s.section}>
           <h2 style={s.h2}>Last Response</h2>
           <p><strong>Status:</strong> {async_.response.status}</p>
-          {async_.response.captured_text && <p><strong>Captured:</strong> {async_.response.captured_text}</p>}
-          {async_.response.message      && <p><strong>Message:</strong>  {async_.response.message}</p>}
+          {async_.response.ai_response_text && <p><strong>AI:</strong> {async_.response.ai_response_text}</p>}
+          {async_.response.next_step        && <p><strong>Next Step:</strong> {async_.response.next_step}</p>}
+          {async_.response.confidence_score !== undefined && <p><strong>Confidence:</strong> {(async_.response.confidence_score * 100).toFixed(0)}%</p>}
+          {async_.response.message          && <p><strong>Message:</strong> {async_.response.message}</p>}
           <p style={s.ts}>Received at {new Date().toLocaleTimeString()}</p>
         </div>
       )}

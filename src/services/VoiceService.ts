@@ -6,7 +6,9 @@ export interface VoicePayload {
 
 export interface VoiceResponse {
   status: 'success' | 'ignored' | 'error';
-  captured_text?: string;
+  ai_response_text?: string;
+  next_step?: string;
+  confidence_score?: number;
   message?: string;
 }
 
