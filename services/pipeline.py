@@ -40,11 +40,17 @@ class VoicePipelineOrchestrator(BasePipeline):
                 max_tokens=150
             )
 
+            ai_reply = response.choices[0].message.content.strip()
+            question_count = ai_reply.count('?')
+            word_count = len(ai_reply.split())
+            base_score = min(0.85, round(word_count / 100, 2))
+            confidence_score = round(max(0.1, base_score - (question_count * 0.05)), 2)  # Penalize per question asked
+
             return PipelineResponse(
                 status="success",
-                ai_response_text=response.choices[0].message.content.strip(),
+                ai_response_text=ai_reply,
                 next_step="GATHERING_INFO",
-                confidence_score=0.90
+                confidence_score=confidence_score
             ).model_dump()
 
         except ValueError as e:
