@@ -3,6 +3,12 @@ import VoiceService, { VoiceResponse } from '../services/VoiceService';
 
 type NetState = 'online' | 'offline' | 'pending';
 
+interface ChatTurn {
+  role: 'user' | 'ai';
+  text: string;
+  download_url?: string | null;
+}
+
 interface UIState {
   textChunk: string;
   interim: string;
@@ -28,12 +34,16 @@ const WAVE_DELAYS = [0, 0.08, 0.16, 0.24, 0.32];
 const VoiceConsole: React.FC = () => {
   const [ui, setUi] = useState<UIState>({ textChunk: localStorage.getItem('vc_draft') ?? '', interim: '', isListening: false, isSpeechSupported: false });
   const [async_, setAsync] = useState<AsyncState>({ isLoading: false, response: null, error: null, net: 'pending' });
+  const [chat, setChat] = useState<ChatTurn[]>([]);
 
   useEffect(() => { localStorage.setItem('vc_draft', ui.textChunk); }, [ui.textChunk]);
 
   const recognitionRef = useRef<any>(null);
   const userId    = useRef('user_'    + Date.now());
   const sessionId = useRef('session_' + Date.now());
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chat]);
 
   useEffect(() => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -61,13 +71,27 @@ const VoiceConsole: React.FC = () => {
 
   const handleSendChunk = async () => {
     if (!ui.textChunk.trim()) return;
+    const userText = ui.textChunk.trim();
+    setChat(p => [...p, { role: 'user', text: userText }]);
+    setUi(p => ({ ...p, textChunk: '', interim: '' }));
+    localStorage.removeItem('vc_draft');
     setAsync(p => ({ ...p, isLoading: true, error: null, net: 'pending' }));
     const res = await VoiceService.sendTranscriptChunk({
-      userId: userId.current, sessionId: sessionId.current, textChunk: ui.textChunk,
+      userId: userId.current, sessionId: sessionId.current, textChunk: userText,
     });
     setAsync({ isLoading: false, response: res, error: res.status === 'error' ? res.message ?? 'Unknown error' : null,
       net: res.status === 'success' ? 'online' : 'offline' });
-    if (res.status === 'success') { localStorage.removeItem('vc_draft'); setUi(p => ({ ...p, textChunk: '', interim: '' })); }
+    if (res.status === 'success') {
+      setChat(p => [...p, { role: 'ai', text: res.ai_response_text ?? '', download_url: res.download_url }]);
+    }
+  };
+
+  const handleNewSession = () => {
+    sessionId.current = 'session_' + Date.now();
+    setChat([]);
+    setAsync({ isLoading: false, response: null, error: null, net: 'pending' });
+    setUi(p => ({ ...p, textChunk: '', interim: '' }));
+    localStorage.removeItem('vc_draft');
   };
 
   const { badge, dot, label } = NET_CONFIG[async_.net];
@@ -90,7 +114,9 @@ const VoiceConsole: React.FC = () => {
           <button style={s.dismiss} onClick={() => setAsync(p => ({ ...p, error: null }))}>✕</button>
         </div>
       )}
-      {async_.response?.status === 'success' && <div style={s.successBanner}>✓ Message sent successfully</div>}
+      {async_.response?.status === 'success' && async_.response?.download_url && (
+        <div style={s.successBanner}>✓ Report generated successfully</div>
+      )}
 
       {/* Voice controls */}
       <div style={s.section}>
@@ -132,18 +158,34 @@ const VoiceConsole: React.FC = () => {
         </div>
       </div>
 
-      {/* Last response */}
-      {async_.response && (
-        <div style={s.section}>
-          <h2 style={s.h2}>Last Response</h2>
-          <p><strong>Status:</strong> {async_.response.status}</p>
-          {async_.response.ai_response_text && <p><strong>AI:</strong> {async_.response.ai_response_text}</p>}
-          {async_.response.next_step        && <p><strong>Next Step:</strong> {async_.response.next_step}</p>}
-          {async_.response.confidence_score !== undefined && <p><strong>Confidence:</strong> {(async_.response.confidence_score * 100).toFixed(0)}%</p>}
-          {async_.response.message          && <p><strong>Message:</strong> {async_.response.message}</p>}
-          <p style={s.ts}>Received at {new Date().toLocaleTimeString()}</p>
+      {/* Chat History */}
+      <div style={s.section}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+          <h2 style={s.h2}>Conversation</h2>
+          <button style={{ ...s.btn, ...s.btnNew }} onClick={handleNewSession}>＋ New Session</button>
         </div>
-      )}
+        <div style={s.chatBox}>
+          {chat.length === 0 && <div style={s.chatEmpty}>Say something to start the conversation...</div>}
+          {chat.map((turn, i) => (
+            <div key={i} style={{ ...s.bubble, ...(turn.role === 'user' ? s.bubbleUser : s.bubbleAi) }}>
+              <span style={s.bubbleLabel}>{turn.role === 'user' ? '🧑 You' : '🤖 AI'}</span>
+              <p style={s.bubbleText}>{turn.text}</p>
+              {turn.download_url && (
+                <a href={`http://localhost:8000${turn.download_url}`} target="_blank" rel="noreferrer" style={s.downloadBtn}>
+                  📄 Download Report PDF
+                </a>
+              )}
+            </div>
+          ))}
+          {async_.isLoading && (
+            <div style={{ ...s.bubble, ...s.bubbleAi }}>
+              <span style={s.bubbleLabel}>🤖 AI</span>
+              <p style={{ ...s.bubbleText, color:'#999' }}>Thinking...</p>
+            </div>
+          )}
+          <div ref={chatEndRef} />
+        </div>
+      </div>
     </div>
   );
 };
@@ -188,4 +230,15 @@ const s: Record<string, React.CSSProperties & { [k: string]: any }> = {
                   background:'linear-gradient(135deg,#f8f9fa,#e9ecef)', borderRadius:8,
                   border:'1.5px dashed #adb5bd', color:'#6c757d', fontSize:13 },
   ts:           { fontSize:12, color:'#666', marginTop:10 },
+  downloadBtn:  { display:'inline-block', marginTop:8, padding:'8px 16px', background:'linear-gradient(135deg,#1cad74,#0d8659)',
+                  color:'#fff', fontWeight:'bold', fontSize:13, borderRadius:6, textDecoration:'none',
+                  boxShadow:'0 2px 8px rgba(28,173,116,.4)' },
+  chatBox:      { maxHeight:380, overflowY:'auto', display:'flex', flexDirection:'column', gap:10, padding:4 },
+  chatEmpty:    { color:'#999', fontSize:13, textAlign:'center', padding:20 },
+  bubble:       { padding:'10px 14px', borderRadius:12, maxWidth:'85%', wordBreak:'break-word' },
+  bubbleUser:   { background:'#007bff', color:'#fff', alignSelf:'flex-end', borderBottomRightRadius:2 },
+  bubbleAi:     { background:'#f0f0f0', color:'#333', alignSelf:'flex-start', borderBottomLeftRadius:2 },
+  bubbleLabel:  { fontSize:11, fontWeight:'bold', opacity:0.7, display:'block', marginBottom:4 },
+  bubbleText:   { margin:0, fontSize:14, lineHeight:1.5 },
+  btnNew:       { background:'#6c757d', fontSize:12, padding:'6px 12px' },
 };

@@ -20,6 +20,11 @@ ENV/
 # Local Database Files
 *.db
 *.sqlite3
+db.json
+
+# Generated PDF reports
+reports/
+Report_*.pdf
 
 # IDE files
 .vscode/
@@ -29,12 +34,13 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Optional logs
+# Logs
 *.log
 
-# Optional coverage reports
+# Coverage reports
 .coverage
 htmlcov/
+
+# Frontend
 node_modules/
 package-lock.json
-db.json
