@@ -10,6 +10,7 @@ export interface VoiceResponse {
   next_step?: string;
   confidence_score?: number;
   message?: string;
+  download_url?: string | null;
 }
 
 class VoiceService {
