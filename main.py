@@ -1,16 +1,20 @@
 # Standard library
 import os
+import re
 
 # Third-party
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 # Local
 from exceptions import DocumentGenerationError, PipelineError, StorageError
+from config import get_livekit_credentials
 from services import GeneratorService, voice_pipeline
+from services.generator import _REPORTS_DIR
+from services.speech_processor import SpeechProcessorService
 from storage import get_conversations_by_user, get_session_history, save_turn
 
 load_dotenv()
@@ -137,24 +141,124 @@ async def process_transcript(payload: VoiceStreamPayload) -> dict:
 
 @app.get("/api/voice/download-report/{session_id}")
 def download_report(session_id: str) -> FileResponse:
-    """Serve a generated PDF report. Validates session_id to prevent path traversal."""
-    import re
     if not re.fullmatch(r"[a-zA-Z0-9_\-]+", session_id):
         raise HTTPException(status_code=400, detail="Invalid session ID format.")
-
-    from services.generator import _REPORTS_DIR
     file_path = os.path.join(_REPORTS_DIR, f"Report_{session_id}.pdf")
-
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Report not found.")
-
-    return FileResponse(
-        file_path,
-        media_type="application/pdf",
-        filename=f"Business_Report_{session_id}.pdf",
-    )
+    return FileResponse(file_path, media_type="application/pdf", filename=f"Business_Report_{session_id}.pdf")
 
 
 @app.get("/api/conversations/{user_id}")
 def get_conversations(user_id: str) -> list:
     return get_conversations_by_user(user_id)
+
+
+# ── LiveKit / Audio-stream routes 
+
+@app.get("/api/voice/get-token")
+def get_livekit_token(roomName: str, identity: str):
+    """Return a signed LiveKit AccessToken for the frontend WebRTC client."""
+    if not roomName or not identity:
+        raise HTTPException(status_code=400, detail="roomName and identity are required.")
+
+    try:
+        from livekit.api import AccessToken, VideoGrants
+        credentials = get_livekit_credentials()
+        token = (
+            AccessToken(credentials["api_key"], credentials["api_secret"])
+            .with_identity(identity)                                            #permission to join.
+            .with_name(identity)
+            .with_grants(VideoGrants(
+                room_join=True,
+                room=roomName,
+                can_publish=True,
+                can_subscribe=True,
+            ))
+            .to_jwt()
+        )
+        return {"status": "success", "token": token, "server_url": credentials["server_url"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to generate LiveKit token.")
+
+
+@app.post("/api/voice/process-audio-stream")        #this is the main voice pipeline.
+async def process_audio_stream(
+    userId: str = Form(...),
+    sessionId: str = Form(...),
+    audio_blob: UploadFile = File(None),
+    text_fallback: str = Form(None),
+):
+    if not re.fullmatch(r"[a-zA-Z0-9_\-]+", sessionId):
+        raise HTTPException(status_code=400, detail="Invalid session ID format.")   #bad and malicious seccion.
+    if not audio_blob and not text_fallback:
+        raise HTTPException(status_code=400, detail="Either audio_blob or text_fallback is required.")
+
+    temp_path = os.path.join(_REPORTS_DIR, f"input_{sessionId}.wav")
+
+    try:
+        os.makedirs(_REPORTS_DIR, exist_ok=True)
+
+        if text_fallback and text_fallback.strip():
+            transcript = text_fallback.strip()
+        else:
+            with open(temp_path, "wb") as f:
+                f.write(await audio_blob.read())
+            transcript = SpeechProcessorService.speech_to_text(temp_path)
+
+        if not transcript:
+            raise HTTPException(status_code=400, detail="No speech detected in audio.")
+
+        history = get_session_history(sessionId)
+        result = await voice_pipeline.execute_stream_pipeline(
+            user_id=userId,
+            session_id=sessionId,
+            raw_text_input=transcript,
+            history=history,
+        )
+
+        if result.get("status") != "success":
+            raise HTTPException(status_code=500, detail="Pipeline error.")
+
+        ai_data = result.get("data", {})
+        intent = ai_data.get("intent", "CHAT")
+        ai_response_text = ai_data.get("ai_response_text", "How can I help you?")
+        is_restricted = intent == "RESTRICTED_REQUEST" or ai_data.get("is_restricted_query", False)
+
+        if is_restricted:
+            save_turn({"user_id": userId, "session_id": sessionId, "user_input": transcript,
+                       "ai_response_text": ai_response_text, "intent": intent, "ai_data": ai_data,
+                       "status": "PENDING_KRRISH_APPROVAL"})
+            response_text = ai_response_text
+        else:
+            response_text = ai_response_text
+            status = "CHAT" if intent == "CHAT" else ("APPROVED" if ai_data.get("data_complete") else "GATHERING")
+            save_turn({"user_id": userId, "session_id": sessionId, "user_input": transcript,
+                       "ai_response_text": response_text, "intent": intent,
+                       "ai_data": ai_data if status == "APPROVED" else {}, "status": status})
+            if status == "APPROVED":
+                GeneratorService.generate_dynamic_pdf(ai_data, sessionId)
+
+        audio_path = await SpeechProcessorService.text_to_speech(response_text, sessionId)
+        audio_url = f"/api/voice/stream-audio/{os.path.basename(audio_path)}" if audio_path else None
+
+        return {
+            "status": "success",
+            "user_said": transcript,
+            "ai_response_text": response_text,
+            "download_url": f"/api/voice/download-report/{sessionId}" if not is_restricted and ai_data.get("data_complete") else None,
+            "voice_response_url": audio_url,
+        }
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+@app.get("/api/voice/stream-audio/{filename}")
+def stream_audio(filename: str):
+    if not re.fullmatch(r"audio_[a-zA-Z0-9_\-]+\.mp3", filename):
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+    path = os.path.join(_REPORTS_DIR, filename)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Audio file not found.")
+    return FileResponse(path, media_type="audio/mpeg", filename=filename)

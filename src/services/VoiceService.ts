@@ -1,79 +1,81 @@
-export interface VoicePayload {
-  userId: string;
-  sessionId: string;
-  textChunk: string;
+const API = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const TIMEOUT = 30_000;
+
+export interface AudioStreamResponse {
+  status: 'success' | 'error';
+  user_said?: string;
+  ai_response_text?: string;
+  voice_response_url?: string | null;
+  download_url?: string | null;
+  message?: string;
 }
 
-export interface VoiceResponse {
-  status: 'success' | 'ignored' | 'error';
-  ai_response_text?: string;
-  next_step?: string;
-  confidence_score?: number;
-  message?: string;
-  download_url?: string | null;
+export interface LiveKitToken {
+  status: string;
+  token: string;
+  server_url: string;
 }
 
 class VoiceService {
   private static instance: VoiceService;
-  private apiUrl: string;
-  private readonly REQUEST_TIMEOUT = 30000;
-
-  private constructor() {
-    this.apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-  }
+  private constructor() {}
 
   static getInstance(): VoiceService {
-    if (!VoiceService.instance) {
-      VoiceService.instance = new VoiceService();
-    }
+    if (!VoiceService.instance) VoiceService.instance = new VoiceService();
     return VoiceService.instance;
   }
 
-  async sendTranscriptChunk(payload: VoicePayload): Promise<VoiceResponse> {
-    const abortController = new AbortController();
-    const timeoutId = setTimeout(() => abortController.abort(), this.REQUEST_TIMEOUT);
-
+  async getLiveKitToken(roomName: string, identity: string): Promise<LiveKitToken> {
     try {
-      const response = await fetch(`${this.apiUrl}/api/voice/process-transcript`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-        signal: abortController.signal,
-      });
-
-      if (!response.ok) {
-        return {
-          status: 'error',
-          message: `Server error: ${response.statusText}`,
-        };
-      }
-
-      const data = await response.json();
-      return data as VoiceResponse;
-    } catch (error) {
-      if (error instanceof TypeError && error.message === 'Failed to fetch') {
-        return {
-          status: 'error',
-          message: 'Network connection failed',
-        };
-      }
-
-      if (error instanceof Error && error.name === 'AbortError') {
-        return {
-          status: 'error',
-          message: 'Request timeout',
-        };
-      }
-
-      return {
-        status: 'error',
-        message: error instanceof Error ? error.message : 'Unknown error occurred',
-      };
-    } finally {
-      clearTimeout(timeoutId);
+      const res = await fetch(
+        `${API}/api/voice/get-token?roomName=${encodeURIComponent(roomName)}&identity=${encodeURIComponent(identity)}`
+      );
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      return await res.json();
+    } catch (e) {
+      throw new Error(e instanceof Error ? e.message : 'Token fetch failed');
     }
+  }
+
+  // Shared dispatcher — audio blob path and text fallback path both resolve here
+  private async postAudioStream(form: FormData): Promise<AudioStreamResponse> {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), TIMEOUT);
+      const res = await fetch(`${API}/api/voice/process-audio-stream`, {
+        method: 'POST',
+        body: form,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        return { status: 'error', message: err.detail ?? res.statusText };
+      }
+      return await res.json();
+    } catch (e) {
+      return { status: 'error', message: e instanceof Error ? e.message : 'Request failed' };
+    }
+  }
+
+  async sendAudioBlob(userId: string, sessionId: string, blob: Blob): Promise<AudioStreamResponse> {
+    const form = new FormData();
+    form.append('userId', userId);
+    form.append('sessionId', sessionId);
+    form.append('audio_blob', blob, 'recording.webm');
+    return this.postAudioStream(form);
+  }
+
+  async sendTextFallback(userId: string, sessionId: string, text: string): Promise<AudioStreamResponse> {
+    const form = new FormData();
+    form.append('userId', userId);
+    form.append('sessionId', sessionId);
+    form.append('text_fallback', text);
+    return this.postAudioStream(form);
+  }
+
+  audioUrl(path: string): string {
+    return `${API}${path}`;
   }
 }
 
