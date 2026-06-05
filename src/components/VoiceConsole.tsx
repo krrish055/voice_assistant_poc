@@ -9,11 +9,11 @@ const MIME             = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
 const SESSION_ID       = 'session_' + Date.now();
 const WAVE_COUNT       = 10;
 const WAVE_DELAYS      = Array.from({ length: WAVE_COUNT }, (_, i) => (i * 0.07) % 0.2);
-const SPEECH_START_MS  = 250;   // sustained speech needed to begin recording
-const SPEECH_STOP_MS   = 1500;  // sustained silence needed to stop & send
+const SPEECH_START_MS  = 140;   // sustained speech needed to begin recording
+const SPEECH_STOP_MS   = 2400;  // sustained silence needed to stop & send
 const MAX_RECORD_MS    = 25000; // hard cap
 const CALIBRATE_FRAMES = 90;    // ~1.5s @ 60fps
-const NOISE_MULT       = 2.2;
+const NOISE_MULT       = 1.6;
 
 const ORBS: Record<Phase, { ring: string; glow: string; label: string; icon: string }> = {
   idle:          { ring: 'border-slate-700',   glow: 'shadow-slate-700/30',  label: 'SYSTEM IDLE', icon: '○' },
@@ -255,7 +255,10 @@ const VoiceConsole: React.FC = () => {
     activeRef.current = true;
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Release any stale AudioContext before requesting mic
+      if (actxRef.current) { actxRef.current.close(); actxRef.current = null; }
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       streamRef.current = stream;
 
       const data = await VoiceService.fetchWelcome();
@@ -273,7 +276,8 @@ const VoiceConsole: React.FC = () => {
         calibrateAndStart(stream);
       }
     } catch (e: any) {
-      fn.current.log(`❌ ${e?.message ?? e}`, 'err');
+      const msg = e?.name ? `${e.name}: ${e.message}` : (e?.message ?? String(e));
+      fn.current.log(`❌ ${msg}`, 'err');
       teardown();
     }
   }, [calibrateAndStart, teardown]);
