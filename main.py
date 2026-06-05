@@ -156,6 +156,17 @@ def get_conversations(user_id: str) -> list:
 
 # ── LiveKit / Audio-stream routes 
 
+@app.get("/api/voice/welcome")
+async def voice_welcome():
+    """Generate and return a TTS welcome greeting audio URL."""
+    session_id = "welcome"
+    text = "Welcome Krrish! I'm your AI compliance voice assistant. Please go ahead and speak — I'm listening."
+    audio_path = await SpeechProcessorService.text_to_speech(text, session_id)
+    if not audio_path:
+        raise HTTPException(status_code=500, detail="Failed to generate welcome audio.")
+    return {"status": "success", "audio_url": f"/api/voice/stream-audio/{os.path.basename(audio_path)}"}
+
+
 @app.get("/api/voice/get-token")
 def get_livekit_token(roomName: str, identity: str):
     """Return a signed LiveKit AccessToken for the frontend WebRTC client."""
@@ -182,7 +193,8 @@ def get_livekit_token(roomName: str, identity: str):
         raise HTTPException(status_code=500, detail="Failed to generate LiveKit token.")
 
 
-@app.post("/api/voice/process-audio-stream")        #this is the main voice pipeline.
+@app.post("/api/voice/process-stream")  # hands-free open-mic endpoint
+@app.post("/api/voice/process-audio-stream")  # legacy alias
 async def process_audio_stream(
     userId: str = Form(...),
     sessionId: str = Form(...),
@@ -202,12 +214,16 @@ async def process_audio_stream(
         if text_fallback and text_fallback.strip():
             transcript = text_fallback.strip()
         else:
+            audio_bytes = await audio_blob.read()
+            # Skip Whisper entirely if blob is too small to contain speech
+            if len(audio_bytes) < 5000:
+                return {"status": "silence", "user_said": "", "ai_response_text": "", "voice_response_url": None, "download_url": None}
             with open(temp_path, "wb") as f:
-                f.write(await audio_blob.read())
+                f.write(audio_bytes)
             transcript = SpeechProcessorService.speech_to_text(temp_path)
 
         if not transcript:
-            raise HTTPException(status_code=400, detail="No speech detected in audio.")
+            return {"status": "silence", "user_said": "", "ai_response_text": "", "voice_response_url": None, "download_url": None}
 
         history = get_session_history(sessionId)
         result = await voice_pipeline.execute_stream_pipeline(
