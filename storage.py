@@ -18,9 +18,14 @@ def _read() -> list:
         return []
     try:
         with open(_DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         raise StorageError(f"Failed to read DB: {e}") from e
+    if isinstance(data, dict):
+        data = data.get("conversations", [])
+    if not isinstance(data, list):
+        return []
+    return [record for record in data if isinstance(record, dict)]
 
 
 def _write(data: list) -> None:

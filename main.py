@@ -206,7 +206,7 @@ async def process_audio_stream(
     if not audio_blob and not text_fallback:
         raise HTTPException(status_code=400, detail="Either audio_blob or text_fallback is required.")
 
-    temp_path = os.path.join(_REPORTS_DIR, f"input_{sessionId}.wav")
+    temp_path = None
 
     try:
         os.makedirs(_REPORTS_DIR, exist_ok=True)
@@ -218,6 +218,11 @@ async def process_audio_stream(
             # Skip Whisper entirely if blob is too small to contain speech
             if len(audio_bytes) < 5000:
                 return {"status": "silence", "user_said": "", "ai_response_text": "", "voice_response_url": None, "download_url": None}
+            original_name = os.path.basename(audio_blob.filename or "")
+            ext = os.path.splitext(original_name)[1].lower()
+            if ext not in {".webm", ".wav", ".mp3", ".m4a", ".ogg", ".flac"}:
+                ext = ".webm"
+            temp_path = os.path.join(_REPORTS_DIR, f"input_{sessionId}{ext}")
             with open(temp_path, "wb") as f:
                 f.write(audio_bytes)
             transcript = SpeechProcessorService.speech_to_text(temp_path)
@@ -266,7 +271,7 @@ async def process_audio_stream(
             "voice_response_url": audio_url,
         }
     finally:
-        if os.path.exists(temp_path):
+        if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
 
 
