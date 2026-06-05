@@ -1,441 +1,441 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import VoiceService, { AudioStreamResponse } from '../services/VoiceService';
+import { Mic, MicOff, Square, MessageSquare, X, Send, Download, Radio } from 'lucide-react';
+import VoiceService, { StreamResponse } from '../services/VoiceService';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+type Phase = 'idle' | 'connecting' | 'waiting' | 'recording' | 'ai-speaking' | 'processing';
+type Log   = { ts: string; msg: string; level: 'info' | 'ok' | 'warn' | 'err' };
 
-type NetStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+const MIME             = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+const SESSION_ID       = 'session_' + Date.now();
+const WAVE_COUNT       = 10;
+const WAVE_DELAYS      = Array.from({ length: WAVE_COUNT }, (_, i) => (i * 0.07) % 0.2);
+const SPEECH_START_MS  = 250;   // sustained speech needed to begin recording
+const SPEECH_STOP_MS   = 1500;  // sustained silence needed to stop & send
+const MAX_RECORD_MS    = 25000; // hard cap
+const CALIBRATE_FRAMES = 90;    // ~1.5s @ 60fps
+const NOISE_MULT       = 2.2;
 
-interface ChatTurn {
-  role: 'user' | 'ai';
-  text: string;
-  download_url?: string | null;
-}
-
-interface LogEntry {
-  ts: string;
-  msg: string;
-  type: 'info' | 'success' | 'error' | 'warn';
-}
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const now = () => new Date().toLocaleTimeString('en-US', { hour12: false });
-
-const STATUS_STYLES: Record<NetStatus, { bg: string; dot: string; label: string }> = {
-  disconnected: { bg: 'bg-slate-700',      dot: 'bg-slate-400',   label: 'Disconnected'         },
-  connecting:   { bg: 'bg-amber-900/60',   dot: 'bg-amber-400',   label: 'Connecting...'        },
-  connected:    { bg: 'bg-emerald-900/60', dot: 'bg-emerald-400', label: 'Connected via WebRTC' },
-  error:        { bg: 'bg-red-900/60',     dot: 'bg-red-400',     label: 'Connection Error'     },
+const ORBS: Record<Phase, { ring: string; glow: string; label: string; icon: string }> = {
+  idle:          { ring: 'border-slate-700',   glow: 'shadow-slate-700/30',  label: 'SYSTEM IDLE', icon: '○' },
+  connecting:    { ring: 'border-violet-500',  glow: 'shadow-violet-500/50', label: 'CONNECTING',  icon: '◌' },
+  waiting:       { ring: 'border-violet-400',  glow: 'shadow-violet-400/40', label: 'WAITING',     icon: '◎' },
+  recording:     { ring: 'border-emerald-400', glow: 'shadow-emerald-500/60',label: 'RECORDING',   icon: '●' },
+  'ai-speaking': { ring: 'border-cyan-400',    glow: 'shadow-cyan-500/60',   label: 'AI SPEAKING', icon: '▶' },
+  processing:    { ring: 'border-amber-400',   glow: 'shadow-amber-500/50',  label: 'PROCESSING',  icon: '…' },
 };
 
-const LOG_COLORS: Record<LogEntry['type'], string> = {
-  info:    'text-slate-400',
-  success: 'text-emerald-400',
-  error:   'text-red-400',
-  warn:    'text-amber-400',
+const RING_COLORS: Record<Phase, string> = {
+  idle: 'bg-slate-500/10', connecting: 'bg-violet-500/15', waiting: 'bg-violet-400/10',
+  recording: 'bg-emerald-400/25', 'ai-speaking': 'bg-cyan-400/20', processing: 'bg-amber-400/15',
 };
 
-const WAVE_DELAYS = [0, 0.08, 0.16, 0.12, 0.04, 0.18, 0.09];
-
-// ── Component ─────────────────────────────────────────────────────────────────
+const fmtTs = () => new Date().toLocaleTimeString('en-US', { hour12: false });
 
 const VoiceConsole: React.FC = () => {
-  const [netStatus,    setNetStatus]    = useState<NetStatus>('disconnected');
-  const [chat,         setChat]         = useState<ChatTurn[]>([]);
-  const [logs,         setLogs]         = useState<LogEntry[]>([]);
-  const [isRecording,  setIsRecording]  = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [audioSrc,     setAudioSrc]     = useState<string | null>(null);
-  const [textInput,    setTextInput]    = useState('');
+  const [phase,    setPhase]    = useState<Phase>('idle');
+  const [logs,     setLogs]     = useState<Log[]>([]);
+  const [dlUrl,    setDlUrl]    = useState<string | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatIn,   setChatIn]   = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  const [amps,     setAmps]     = useState<number[]>(Array(WAVE_COUNT).fill(0.15));
 
-  const userId    = useRef('user_'    + Date.now());
-  const sessionId = useRef('session_' + Date.now());
-  const recorderRef  = useRef<MediaRecorder | null>(null);
-  const chunksRef    = useRef<Blob[]>([]);
-  const streamRef    = useRef<MediaStream | null>(null);
-  const chatEndRef   = useRef<HTMLDivElement>(null);
-  const audioRef     = useRef<HTMLAudioElement>(null);
+  // ── Stable state refs (never stale in closures) ────────────────────────────
+  const phaseRef      = useRef<Phase>('idle');
+  const activeRef     = useRef(false);
+  const streamRef     = useRef<MediaStream | null>(null);
+  const recRef        = useRef<MediaRecorder | null>(null);
+  const chunksRef     = useRef<Blob[]>([]);
+  const audioRef      = useRef<HTMLAudioElement | null>(null);
+  const actxRef       = useRef<AudioContext | null>(null);
+  const analyserRef   = useRef<AnalyserNode | null>(null);
+  const rafRef        = useRef<number | null>(null);
+  const noiseFloor    = useRef(20);
+  const speechTimRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const silenceTimRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const maxTimRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const logEndRef     = useRef<HTMLDivElement>(null);
+  const dlUrlRef      = useRef<string | null>(null);
 
-  const isConnected = netStatus === 'connected';
+  // ── fn ref — single object; VAD loop reads from here, always fresh ─────────
+  const fn = useRef({
+    setPhase:   (p: Phase) => { phaseRef.current = p; setPhase(p); },
+    log:        (msg: string, level: Log['level'] = 'info') =>
+                  setLogs(prev => [...prev.slice(-49), { ts: fmtTs(), msg, level }]),
+    clearTimers: () => {
+      [speechTimRef, silenceTimRef, maxTimRef].forEach(r => {
+        if (r.current) { clearTimeout(r.current); r.current = null; }
+      });
+    },
+  });
 
-  // Auto-connect on mount
-  useEffect(() => { handleConnect(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
 
-  // Auto-scroll chat
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chat]);
-
-  // Auto-play on new audio
-  useEffect(() => {
-    if (audioSrc && audioRef.current) {
-      audioRef.current.load();
-      audioRef.current.play().catch(() => {});
-    }
-  }, [audioSrc]);
-
-  const log = useCallback((msg: string, type: LogEntry['type'] = 'info') => {
-    setLogs(p => [...p.slice(-49), { ts: now(), msg, type }]);
+  // ── After AI audio finishes — go back to waiting ───────────────────────────
+  const goWaiting = useCallback(() => {
+    fn.current.setPhase('waiting');
+    fn.current.log('🎙 Listening for speech…', 'info');
   }, []);
 
-  // ── Shared response handler ────────────────────────────────────────────────
+  // ── Play AI audio ──────────────────────────────────────────────────────────
+  const playAudio = useCallback((url: string) => {
+    const a = new Audio(VoiceService.fullUrl(url) + `?t=${Date.now()}`);
+    audioRef.current = a;
+    fn.current.setPhase('ai-speaking');
+    const finish = () => {
+      if (audioRef.current !== a) return;
+      audioRef.current = null;
+      if (activeRef.current) goWaiting();
+    };
+    a.onended = finish;
+    a.onerror = finish;
+    a.play().catch(finish);
+  }, [goWaiting]);
 
-  const handleResponse = useCallback((res: AudioStreamResponse, userText?: string) => {
-    if (res.status !== 'success') {
-      log(`Pipeline error: ${res.message}`, 'error');
-      return;
-    }
+  // ── Send blob to backend ───────────────────────────────────────────────────
+  const sendBlob = useCallback(async (blob: Blob) => {
+    fn.current.setPhase('processing');
+    fn.current.log(`📡 Sending ${(blob.size / 1024).toFixed(1)} KB…`);
 
-    const displayText = userText ?? res.user_said ?? '';
-    log(`Transcription: "${res.user_said ?? userText}"`, 'success');
+    const res: StreamResponse = await VoiceService.sendChunk(blob, SESSION_ID);
+    if (!activeRef.current) return;
 
-    setChat(p => [
-      ...p,
-      { role: 'user', text: displayText },
-      { role: 'ai',   text: res.ai_response_text ?? '', download_url: res.download_url },
-    ]);
-
-    if (res.voice_response_url) {
-      // Cache-buster: prevent browser serving stale audio asset
-      setAudioSrc(`${VoiceService.audioUrl(res.voice_response_url)}?t=${Date.now()}`);
-      log('TTS audio mounted — playing response.', 'success');
-    }
-
-    if (res.download_url) log('Compliance report ready — download available.', 'success');
-  }, [log]);
-
-  // ── LiveKit Handshake ──────────────────────────────────────────────────────
-
-  const handleConnect = async () => {
-    setNetStatus('connecting');
-    log('Initiating LiveKit authentication handshake...');
-    try {
-      const data = await VoiceService.getLiveKitToken('main-room', userId.current);
-      if (data.status === 'success' && data.token) {
-        setNetStatus('connected');
-        log(`Token acquired · Server: ${data.server_url}`, 'success');
-      } else {
-        throw new Error('Invalid token response');
+    if (res.status === 'success' && res.voice_response_url) {
+      fn.current.log(`🤖 ${res.ai_response_text?.slice(0, 80) ?? 'AI replied.'}`, 'ok');
+      if (res.download_url && res.download_url !== dlUrlRef.current) {
+        dlUrlRef.current = res.download_url;
+        setDlUrl(res.download_url);
+        fn.current.log('📄 Report ready.', 'ok');
       }
-    } catch (e) {
-      setNetStatus('error');
-      log(`Handshake failed: ${e instanceof Error ? e.message : e}`, 'error');
+      playAudio(res.voice_response_url);
+    } else {
+      fn.current.log('🔇 No speech — waiting…', 'warn');
+      goWaiting();
     }
-  };
+  }, [playAudio, goWaiting]);
 
-  // ── Tap-to-Talk Toggle ────────────────────────────────────────────────────
+  // ── Stop recorder & dispatch ───────────────────────────────────────────────
+  const stopAndSend = useCallback(() => {
+    fn.current.clearTimers();
+    const rec = recRef.current;
+    if (!rec || rec.state !== 'recording') return;
 
-  const handleMicToggle = async () => {
-    if (isProcessing) return;
-
-    // ── Second tap: stop recording ──
-    if (isRecording) {
-      recorderRef.current?.stop();         // fires onstop → handleAudioReady
-      setIsRecording(false);
-      log('Recording stopped — packaging blob...', 'info');
-      return;
-    }
-
-    // ── First tap: start recording ──
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      streamRef.current = stream;
+    rec.onstop = () => {
+      const blob = new Blob(chunksRef.current, { type: MIME });
       chunksRef.current = [];
+      recRef.current    = null;
+      if (activeRef.current) sendBlob(blob);
+    };
+    rec.stop();
+  }, [sendBlob]);
 
-      const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus' : 'audio/webm';
-
-      const recorder = new MediaRecorder(stream, { mimeType: mime });
-      recorder.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-      recorder.onstop = () => handleAudioReady(mime);
-      recorderRef.current = recorder;
-      recorder.start(100);
-      setIsRecording(true);
-      log('VAD triggered — capturing audio frames...', 'info');
-    } catch (e) {
-      log(`Mic access denied: ${e instanceof Error ? e.message : e}`, 'error');
-    }
-  };
-
-  const handleAudioReady = async (mime: string) => {
-    // Explicit hardware teardown — prevent mic icon staying active
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
-
-    const blob = new Blob(chunksRef.current, { type: mime });
+  // ── Start recorder ─────────────────────────────────────────────────────────
+  const startRecording = useCallback((stream: MediaStream) => {
+    if (recRef.current?.state === 'recording') return;
     chunksRef.current = [];
+    const rec = new MediaRecorder(stream, { mimeType: MIME });
+    rec.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+    recRef.current = rec;
+    rec.start(100);
+    fn.current.setPhase('recording');
+    fn.current.log('🔴 Recording…', 'ok');
+    maxTimRef.current = setTimeout(stopAndSend, MAX_RECORD_MS);
+  }, [stopAndSend]);
 
-    if (blob.size < 500) {
-      log('Audio too short — ignoring.', 'warn');
-      return;
+  // ── VAD tick — reads from refs, never stale ────────────────────────────────
+  const vadTick = useCallback(() => {
+    if (!activeRef.current || !analyserRef.current) return;
+    const analyser = analyserRef.current;
+    const buf = new Uint8Array(analyser.frequencyBinCount);
+
+    const tick = () => {
+      if (!activeRef.current) return;
+      analyser.getByteFrequencyData(buf);
+      const avg = buf.reduce((s, v) => s + v, 0) / buf.length;
+
+      // Wave bar heights
+      setAmps(Array.from({ length: WAVE_COUNT }, (_, i) => {
+        const s = buf.slice(i * 4, i * 4 + 4);
+        return Math.max(0.12, Math.min(1, s.reduce((a, v) => a + v, 0) / (s.length * 230)));
+      }));
+
+      const loud = avg > noiseFloor.current;
+      const p    = phaseRef.current;          // always fresh — ref, not closure
+
+      if (p === 'waiting') {
+        if (loud) {
+          if (!speechTimRef.current) {
+            speechTimRef.current = setTimeout(() => {
+              speechTimRef.current = null;
+              // re-check phase from ref — not stale closure
+              if (phaseRef.current === 'waiting' && activeRef.current && streamRef.current) {
+                startRecording(streamRef.current);
+              }
+            }, SPEECH_START_MS);
+          }
+        } else {
+          if (speechTimRef.current) { clearTimeout(speechTimRef.current); speechTimRef.current = null; }
+        }
+      }
+
+      if (p === 'recording') {
+        if (!loud) {
+          if (!silenceTimRef.current) {
+            silenceTimRef.current = setTimeout(() => {
+              silenceTimRef.current = null;
+              if (phaseRef.current === 'recording' && activeRef.current) {
+                stopAndSend();
+              }
+            }, SPEECH_STOP_MS);
+          }
+        } else {
+          if (silenceTimRef.current) { clearTimeout(silenceTimRef.current); silenceTimRef.current = null; }
+        }
+      }
+
+      rafRef.current = requestAnimationFrame(tick);
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+  }, [startRecording, stopAndSend]);
+
+  // ── Calibrate then start VAD ───────────────────────────────────────────────
+  const calibrateAndStart = useCallback((stream: MediaStream) => {
+    if (actxRef.current) return;
+    const ctx      = new AudioContext();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    ctx.createMediaStreamSource(stream).connect(analyser);
+    actxRef.current   = ctx;
+    analyserRef.current = analyser;
+
+    const buf = new Uint8Array(analyser.frequencyBinCount);
+    let sum = 0, frames = 0;
+
+    fn.current.log('🔬 Calibrating mic…', 'info');
+
+    const calibTick = () => {
+      if (!activeRef.current) return;
+      analyser.getByteFrequencyData(buf);
+      sum += buf.reduce((s, v) => s + v, 0) / buf.length;
+      if (++frames < CALIBRATE_FRAMES) { requestAnimationFrame(calibTick); return; }
+      const ambient = sum / frames;
+      noiseFloor.current = Math.min(55, Math.max(12, ambient * NOISE_MULT));
+      fn.current.log(`🔬 Noise floor: ${noiseFloor.current.toFixed(1)}`, 'info');
+      goWaiting();
+      vadTick();
+    };
+    requestAnimationFrame(calibTick);
+  }, [goWaiting, vadTick]);
+
+  // ── Full teardown ──────────────────────────────────────────────────────────
+  const teardown = useCallback(() => {
+    activeRef.current = false;
+    fn.current.clearTimers();
+    rafRef.current && cancelAnimationFrame(rafRef.current); rafRef.current = null;
+    if (recRef.current?.state === 'recording') { recRef.current.onstop = null; recRef.current.stop(); }
+    recRef.current = null; chunksRef.current = [];
+    streamRef.current?.getTracks().forEach(t => t.stop()); streamRef.current = null;
+    actxRef.current?.close(); actxRef.current = null; analyserRef.current = null;
+    if (audioRef.current) {
+      audioRef.current.onended = null; audioRef.current.pause();
+      audioRef.current.src = ''; audioRef.current = null;
     }
+    setPhase('idle'); phaseRef.current = 'idle';
+    setAmps(Array(WAVE_COUNT).fill(0.15));
+  }, []);
 
-    setIsProcessing(true);
-    log(`Dispatching ${(blob.size / 1024).toFixed(1)} KB to STT pipeline...`);
+  useEffect(() => () => teardown(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const res = await VoiceService.sendAudioBlob(userId.current, sessionId.current, blob);
-    setIsProcessing(false);
-    handleResponse(res);
-  };
+  // ── Connect ────────────────────────────────────────────────────────────────
+  const handleConnect = useCallback(async () => {
+    if (phaseRef.current !== 'idle') return;
+    fn.current.setPhase('connecting');
+    fn.current.log('🔗 Connecting…');
+    activeRef.current = true;
 
-  // ── Text Fallback ─────────────────────────────────────────────────────────
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
 
-  const handleSendText = async () => {
-    const text = textInput.trim();
-    if (!text || isProcessing) return;
-    setTextInput('');
-    setIsProcessing(true);
-    log(`Dispatching text fallback: "${text}"`);
+      const data = await VoiceService.fetchWelcome();
+      if (!activeRef.current) return;
 
-    const res = await VoiceService.sendTextFallback(userId.current, sessionId.current, text);
-    setIsProcessing(false);
-    handleResponse(res, text);
-  };
+      if (data.audio_url) {
+        fn.current.setPhase('ai-speaking');
+        fn.current.log('👋 Playing welcome…', 'ok');
+        const a = new Audio(VoiceService.fullUrl(data.audio_url) + `?t=${Date.now()}`);
+        audioRef.current = a;
+        const done = () => { audioRef.current = null; if (activeRef.current) calibrateAndStart(stream); };
+        a.onended = done; a.onerror = done;
+        a.play().catch(done);
+      } else {
+        calibrateAndStart(stream);
+      }
+    } catch (e: any) {
+      fn.current.log(`❌ ${e?.message ?? e}`, 'err');
+      teardown();
+    }
+  }, [calibrateAndStart, teardown]);
 
-  // ── New Session ───────────────────────────────────────────────────────────
+  // ── Chat fallback ──────────────────────────────────────────────────────────
+  const handleChatSend = useCallback(async () => {
+    const text = chatIn.trim();
+    if (!text || chatBusy) return;
+    setChatIn(''); setChatBusy(true);
+    fn.current.log(`💬 "${text.slice(0, 60)}"`, 'info');
 
-  const handleNewSession = () => {
-    recorderRef.current?.stop();
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
+    fn.current.clearTimers();
+    if (recRef.current?.state === 'recording') { recRef.current.onstop = null; recRef.current.stop(); recRef.current = null; }
+    fn.current.setPhase('processing');
 
-    sessionId.current = 'session_' + Date.now();
-    setNetStatus('disconnected');
-    setChat([]);
-    setLogs([]);
-    setAudioSrc(null);
-    setTextInput('');
-    setIsRecording(false);
-    setIsProcessing(false);
-    log('New session initialized.', 'info');
-  };
+    const res = await VoiceService.sendText(text, SESSION_ID);
+    setChatBusy(false);
+    if (!activeRef.current) return;
 
-  // ── Render ────────────────────────────────────────────────────────────────
+    if (res.status === 'success' && res.voice_response_url) {
+      fn.current.log(`🤖 ${res.ai_response_text?.slice(0, 80) ?? 'AI replied.'}`, 'ok');
+      if (res.download_url) { setDlUrl(res.download_url); fn.current.log('📄 Report ready.', 'ok'); }
+      playAudio(res.voice_response_url);
+    } else {
+      goWaiting();
+    }
+  }, [chatIn, chatBusy, playAudio, goWaiting]);
 
-  const { bg, dot, label } = STATUS_STYLES[netStatus];
-  const lastDownload = [...chat].reverse().find(t => t.role === 'ai' && t.download_url);
+  const isActive = phase !== 'idle';
+  const orb      = ORBS[phase];
+  const LOG_C    = { info: 'text-slate-400', ok: 'text-emerald-400', warn: 'text-amber-400', err: 'text-red-400' };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 p-4 md:p-8">
-      <div className="max-w-3xl mx-auto space-y-4">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-6 gap-5 overflow-x-hidden">
 
-        {/* ── Header ── */}
-        <div className="flex items-start justify-between">
+      <div className="w-full max-w-2xl flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Radio size={18} className="text-cyan-400" />
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-white">
-              🎙️ Voice Compliance Console
-            </h1>
-            <p className="text-slate-500 text-xs mt-0.5">AI-powered document gateway</p>
+            <h1 className="text-sm font-bold tracking-widest uppercase text-slate-200">Compliance Voice Node</h1>
+            <p className="text-[10px] text-slate-600 tracking-wide">AI · Hands-Free · Speech-Gated</p>
           </div>
-          <button
-            onClick={handleNewSession}
-            className="text-xs text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 rounded-lg transition-colors"
-          >
-            + New Session
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setChatOpen(o => !o)}
+            className={`p-2 rounded-lg border transition-colors ${chatOpen
+              ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400'
+              : 'bg-slate-900 border-slate-800 text-slate-500 hover:text-slate-300'}`}>
+            <MessageSquare size={15} />
           </button>
-        </div>
-
-        {/* ── Connection Bar ── */}
-        <div className="bg-slate-800 border border-slate-700 rounded-2xl p-4 flex items-center gap-3">
-          <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold ${bg}`}>
-            <span className={`w-2 h-2 rounded-full ${dot} ${netStatus === 'connecting' ? 'animate-pulse' : ''}`} />
-            {label}
-          </div>
-          {!isConnected && (
-            <button
-              onClick={handleConnect}
-              disabled={netStatus === 'connecting'}
-              className="text-xs bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-1.5 rounded-full font-semibold transition-colors"
-            >
-              {netStatus === 'connecting' ? 'Connecting...' : 'Connect'}
+          {isActive && (
+            <button onClick={teardown}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-900/40 border border-red-800/60 text-red-400 hover:bg-red-900/70 text-xs font-semibold transition-colors">
+              <Square size={11} /> Stop
             </button>
           )}
-          {isConnected && (
-            <span className="text-xs text-slate-600 ml-auto font-mono">
-              {sessionId.current.slice(-10)}
-            </span>
-          )}
         </div>
+      </div>
 
-        {/* ── Main Grid ── */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
-          {/* ── Tap-to-Talk Panel ── */}
-          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 flex flex-col items-center gap-5">
-            <div className="text-center">
-              <p className="text-sm font-semibold text-slate-200">Tap to Talk</p>
-              <p className="text-xs text-slate-500 mt-0.5">Tap once to record · Tap again to send</p>
-            </div>
-
-            {/* Mic Button */}
-            <div className="relative flex items-center justify-center w-24 h-24">
-              {isRecording && (
-                <span className="absolute inset-0 rounded-full bg-red-500/30 animate-ping" />
-              )}
-              <button
-                onClick={handleMicToggle}
-                disabled={isProcessing}
-                className={`relative z-10 w-20 h-20 rounded-full flex items-center justify-center text-2xl
-                  transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-sky-500 select-none
-                  ${isProcessing
-                    ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
-                    : isRecording
-                    ? 'bg-red-500 text-white shadow-lg shadow-red-500/40 scale-105'
-                    : 'bg-sky-600 hover:bg-sky-500 text-white shadow-lg shadow-sky-600/30 active:scale-95'
-                  }`}
-              >
-                {isProcessing
-                  ? <span className="spinner" />
-                  : isRecording ? '⏹' : '🎤'
-                }
-              </button>
-            </div>
-
-            {/* Wave Visualizer */}
-            <div className="flex items-center justify-center gap-1 h-10 w-full">
-              {isRecording
-                ? WAVE_DELAYS.map((d, i) => (
-                    <div key={i} className="wave-bar" style={{ animationDelay: `${d}s` }} />
-                  ))
-                : <p className="text-xs text-slate-600">
-                    {isProcessing ? 'Processing...' : 'Waveform idle'}
-                  </p>
-              }
-            </div>
-
-            <p className="text-xs font-mono text-center px-3 py-1.5 rounded-lg bg-slate-900/60 text-slate-500 w-full">
-              {isRecording ? '● REC — Tap to send' : isProcessing ? '⏳ Pipeline running...' : '○ Ready'}
-            </p>
-          </div>
-
-          {/* ── Audio Player + Download ── */}
-          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 flex flex-col gap-4">
-            <p className="text-sm font-semibold text-slate-200">AI Voice Response</p>
-
-            {audioSrc ? (
-              <div className="space-y-2">
-                <audio
-                  ref={audioRef}
-                  src={audioSrc}
-                  controls
-                  className="w-full rounded-lg"
-                  style={{ colorScheme: 'dark', accentColor: '#38bdf8' }}
-                />
-                <p className="text-xs text-emerald-400">✓ TTS response loaded</p>
-              </div>
-            ) : (
-              <div className="flex-1 flex items-center justify-center border border-dashed border-slate-700 rounded-xl h-20">
-                <p className="text-xs text-slate-600">Response audio appears here</p>
-              </div>
-            )}
-
-            {lastDownload && (
-              <a
-                href={VoiceService.audioUrl(lastDownload.download_url!)}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl
-                           bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors"
-              >
-                📄 Download Compliance Report
-              </a>
-            )}
+      <div className="w-full max-w-2xl bg-slate-900/50 backdrop-blur-md border border-slate-800/80 rounded-3xl p-8 flex flex-col items-center gap-8">
+        <div className="relative flex items-center justify-center w-52 h-52">
+          {isActive && [0, 0.5, 1].map(d => (
+            <span key={d} className={`ripple-ring ${RING_COLORS[phase]}`} style={{ animationDelay: `${d}s` }} />
+          ))}
+          <div className={`absolute inset-6 rounded-full border-2 ${orb.ring} ${isActive ? `shadow-xl ${orb.glow}` : ''} transition-all duration-500`} />
+          <div className={`relative z-10 flex flex-col items-center justify-center w-28 h-28 rounded-full bg-slate-950 border ${orb.ring} shadow-2xl ${orb.glow} transition-all duration-500`}>
+            <span className="text-2xl leading-none">{orb.icon}</span>
+            <span className="text-[9px] font-bold tracking-widest mt-1 text-slate-400">{orb.label}</span>
           </div>
         </div>
 
-        {/* ── Chat History ── */}
-        <div className="bg-slate-800 border border-slate-700 rounded-2xl p-5">
-          <p className="text-sm font-semibold text-slate-200 mb-3">Conversation</p>
-          <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
-            {chat.length === 0
-              ? <p className="text-xs text-slate-600 text-center py-8">
-                  Connect and speak or type to begin...
-                </p>
-              : chat.map((turn, i) => (
-                <div key={i} className={`flex ${turn.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed
-                    ${turn.role === 'user'
-                      ? 'bg-sky-600 text-white rounded-br-sm'
-                      : 'bg-slate-700 text-slate-200 rounded-bl-sm'
-                    }`}>
-                    <p className="text-[10px] font-bold opacity-50 mb-1">
-                      {turn.role === 'user' ? 'YOU' : 'AI ASSISTANT'}
-                    </p>
-                    {turn.text}
-                  </div>
-                </div>
-              ))
-            }
-            {isProcessing && (
-              <div className="flex justify-start">
-                <div className="bg-slate-700 px-4 py-3 rounded-2xl rounded-bl-sm flex gap-1 items-center">
-                  {[0, 0.15, 0.3].map(d => (
-                    <span
-                      key={d}
-                      className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"
-                      style={{ animationDelay: `${d}s` }}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-            <div ref={chatEndRef} />
-          </div>
+        <div className="flex items-end justify-center gap-1 h-10">
+          {WAVE_DELAYS.map((delay, i) => (
+            <div key={i} className={`wave-bar transition-colors duration-300 ${
+              phase === 'recording'   ? 'bg-emerald-400' :
+              phase === 'ai-speaking' ? 'bg-cyan-400'    : 'bg-slate-700'
+            }`} style={{
+              animationDelay: `${delay}s`,
+              height: `${(isActive ? amps[i] : 0.15) * 40}px`,
+              animationPlayState: isActive ? 'running' : 'paused',
+            }} />
+          ))}
         </div>
 
-        {/* ── Text Fallback ── */}
-        <div className="bg-slate-800 border border-slate-700 rounded-2xl p-4">
-          <p className="text-xs text-slate-500 mb-2 font-medium">Keyboard Fallback</p>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={textInput}
-              onChange={e => setTextInput(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleSendText()}
-              disabled={isProcessing}
-              placeholder="Type a message and press Enter or Send..."
-              className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm
-                         text-slate-200 placeholder-slate-600 focus:outline-none focus:border-sky-500
-                         disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        {!isActive ? (
+          <button onClick={handleConnect}
+            className="flex items-center gap-2 px-8 py-3.5 rounded-2xl bg-gradient-to-r from-violet-600 to-cyan-600
+              hover:from-violet-500 hover:to-cyan-500 text-white font-bold text-sm tracking-wide
+              shadow-lg shadow-violet-500/20 transition-all active:scale-95 slide-up">
+            <Mic size={16} /> Connect Compliance Node
+          </button>
+        ) : (
+          <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-800/80 border border-slate-700/50 text-xs text-slate-400 slide-up">
+            <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
+              phase === 'recording'   ? 'bg-emerald-400' :
+              phase === 'ai-speaking' ? 'bg-cyan-400'    :
+              phase === 'processing'  ? 'bg-amber-400'   : 'bg-violet-400'
+            }`} />
+            {orb.label} · {SESSION_ID.slice(-8)}
+            {phase === 'processing' && <span className="spinner ml-1" />}
+          </div>
+        )}
+
+        {dlUrl && (
+          <a href={VoiceService.fullUrl(dlUrl)} target="_blank" rel="noreferrer"
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-900/50 border border-emerald-700/50
+              hover:bg-emerald-900/80 text-emerald-400 text-xs font-semibold transition-colors slide-up">
+            <Download size={13} /> Download Compliance Report
+          </a>
+        )}
+      </div>
+
+      {chatOpen && (
+        <div className="w-full max-w-2xl bg-slate-900/50 backdrop-blur-md border border-slate-800/80 rounded-3xl overflow-hidden slide-up">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-slate-800/80">
+            <div className="flex items-center gap-2 text-xs">
+              <MessageSquare size={13} className="text-cyan-400" />
+              <span className="font-semibold text-slate-300">Chat Fallback</span>
+              <span className="text-slate-600">· type instead of speaking</span>
+            </div>
+            <button onClick={() => setChatOpen(false)} className="text-slate-600 hover:text-slate-300"><X size={14} /></button>
+          </div>
+          <div className="p-4 flex gap-2">
+            <input type="text" value={chatIn}
+              onChange={e => setChatIn(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleChatSend()}
+              disabled={chatBusy} placeholder="Type your request…"
+              className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm
+                text-slate-200 placeholder-slate-700 focus:outline-none focus:border-cyan-500/50
+                disabled:opacity-40 transition-colors"
             />
-            <button
-              onClick={handleSendText}
-              disabled={isProcessing || !textInput.trim()}
-              className="bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed
-                         px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors"
-            >
-              Send
+            <button onClick={handleChatSend} disabled={chatBusy || !chatIn.trim()}
+              className="px-4 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-30 text-white text-sm font-semibold transition-colors">
+              {chatBusy ? <span className="spinner" /> : <Send size={14} />}
             </button>
           </div>
         </div>
+      )}
 
-        {/* ── Execution Log ── */}
-        <div className="bg-slate-800 border border-slate-700 rounded-2xl p-5">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
-              Execution Log
-            </p>
-            <button
-              onClick={() => setLogs([])}
-              className="text-xs text-slate-600 hover:text-slate-400 transition-colors"
-            >
-              Clear
-            </button>
+      <div className="w-full max-w-2xl bg-slate-900/50 backdrop-blur-md border border-slate-800/80 rounded-3xl p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+            <span className="font-semibold text-slate-400 tracking-wide uppercase">Pipeline Log</span>
           </div>
-          <div className="font-mono text-xs space-y-1 max-h-40 overflow-y-auto pr-1">
-            {logs.length === 0
-              ? <p className="text-slate-700">No events yet.</p>
-              : logs.map((l, i) => (
-                <div key={i} className="flex gap-2">
-                  <span className="text-slate-600 shrink-0">[{l.ts}]</span>
-                  <span className={LOG_COLORS[l.type]}>{l.msg}</span>
-                </div>
-              ))
-            }
+          <div className="flex items-center gap-3">
+            {isActive ? <Mic size={12} className="text-emerald-400 animate-pulse" /> : <MicOff size={12} className="text-slate-700" />}
+            <button onClick={() => setLogs([])} className="text-[10px] text-slate-700 hover:text-slate-500">clear</button>
           </div>
         </div>
-
+        <div className="font-mono text-[11px] space-y-0.5 max-h-44 overflow-y-auto pr-1">
+          {logs.length === 0
+            ? <span className="text-slate-800">No pipeline events yet.</span>
+            : logs.map((l, i) => (
+              <div key={i} className="flex gap-2 slide-up">
+                <span className="text-slate-700 shrink-0">[{l.ts}]</span>
+                <span className={LOG_C[l.level]}>{l.msg}</span>
+              </div>
+            ))
+          }
+          <div ref={logEndRef} />
+        </div>
       </div>
     </div>
   );
