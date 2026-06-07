@@ -1,48 +1,39 @@
-# Standard library
 import os
 
 from exceptions import ConfigurationError
 
-
-# ── LLM Config ────────────────────────────────────────────────────────────────
-
-GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
-
+GROQ_BASE_URL   = 'https://api.groq.com/openai/v1'
+DEFAULT_MODEL   = 'llama-3.3-70b-versatile'
 LLM_TEMPERATURE = 0.4
-
-LLM_MAX_TOKENS = 800
+LLM_MAX_TOKENS  = 800
 
 
 def get_groq_api_key() -> str:
-    key = os.getenv("GROQ_API_KEY")
+    key = os.getenv('GROQ_API_KEY')
     if not key:
-        raise ConfigurationError("GROQ_API_KEY not found in environment.")
+        raise ConfigurationError('GROQ_API_KEY not found in environment.')
     return key
 
 
 def get_model() -> str:
-    return os.getenv("GROQ_MODEL", DEFAULT_MODEL)
+    return os.getenv('GROQ_MODEL', DEFAULT_MODEL)
 
 
 def get_stt_model() -> str:
-    return os.getenv("WHISPER_MODEL", "whisper-large-v3")
+    return os.getenv('WHISPER_MODEL', 'whisper-large-v3')
 
 
 def get_livekit_credentials() -> dict:
-    api_key = os.getenv("LIVEKIT_API_KEY")
-    api_secret = os.getenv("LIVEKIT_API_SECRET")
+    api_key    = os.getenv('LIVEKIT_API_KEY')
+    api_secret = os.getenv('LIVEKIT_API_SECRET')
     if not api_key or not api_secret:
-        raise ConfigurationError("LIVEKIT_API_KEY or LIVEKIT_API_SECRET not found in environment.")
+        raise ConfigurationError('LIVEKIT_API_KEY or LIVEKIT_API_SECRET not found in environment.')
     return {
-        "api_key": api_key,
-        "api_secret": api_secret,
-        "server_url": os.getenv("LIVEKIT_SERVER_URL", "ws://localhost:7880"),
+        'api_key'    : api_key,
+        'api_secret' : api_secret,
+        'server_url' : os.getenv('LIVEKIT_SERVER_URL', 'ws://localhost:7880'),
     }
 
-
-# ── System Prompt ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """
 You are a friendly Enterprise Voice Assistant. You hold natural voice conversations with users AND can generate business reports/documents on request.
