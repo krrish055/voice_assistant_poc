@@ -1,15 +1,15 @@
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
 from exceptions import StorageError
 
+_log     = logging.getLogger(__name__)
 _DB_BASE = Path(__file__).parent.resolve()
 _DB_FILE = (_DB_BASE / 'db.json').resolve()
 
-# Path traversal guard — ensure db file stays in project root
-if not str(_DB_FILE).startswith(str(_DB_BASE)):
-    raise StorageError('Invalid DB file path.')
+assert str(_DB_FILE).startswith(str(_DB_BASE)), 'DB file path escapes project root.'
 
 
 def _read() -> list:

@@ -1,5 +1,5 @@
-from services.generator import GeneratorService
 from services.pipeline import voice_pipeline
 from services.speech_processor import SpeechProcessorService
+from services.response_builder import ResponseBuilderService
 
-__all__ = ['GeneratorService', 'voice_pipeline', 'SpeechProcessorService']
+__all__ = ['voice_pipeline', 'SpeechProcessorService', 'ResponseBuilderService']
