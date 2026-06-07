@@ -1,6 +1,6 @@
 import React from 'react';
-import VoiceConsole from './components/VoiceConsole';
+import InTimeTecConsole from './components/InTimeTecConsole';
 
-const App: React.FC = () => <VoiceConsole />;
+const App: React.FC = () => <InTimeTecConsole />;
 
 export default App;

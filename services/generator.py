@@ -1,16 +1,12 @@
-# Standard library
-import os
 import re
+from pathlib import Path
 
-# Third-party
 from fpdf import FPDF
 
-# Local
 from exceptions import DocumentGenerationError
 
 
-# Reports are written to a dedicated sub-directory, never the project root
-_REPORTS_DIR = os.path.join(os.path.dirname(__file__), "..", "reports")
+_REPORTS_DIR = str(Path(__file__).parent.parent / 'reports')
 
 
 def _safe_session_id(session_id: str) -> str:
@@ -34,7 +30,11 @@ class GeneratorService:
         """
         try:
             safe_id = _safe_session_id(session_id)
-            os.makedirs(_REPORTS_DIR, exist_ok=True)
+            base   = Path(_REPORTS_DIR).resolve()
+            base.mkdir(parents=True, exist_ok=True)
+            target = (base / f'Report_{safe_id}.pdf').resolve()
+            if not str(target).startswith(str(base)):
+                raise DocumentGenerationError('Invalid session_id')
 
             pdf = FPDF()
             pdf.add_page()
@@ -79,7 +79,7 @@ class GeneratorService:
             pdf.set_text_color(52, 73, 94)
             pdf.multi_cell(0, 7, txt=_sanitize(ai_data.get("ai_summary", "No details provided.")))
 
-            filepath = os.path.join(_REPORTS_DIR, f"Report_{safe_id}.pdf")
+            filepath = str(target)
             pdf.output(filepath)
             return filepath
 
