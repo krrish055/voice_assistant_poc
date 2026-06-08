@@ -9,18 +9,18 @@ import { useVADEngine, mkId } from '../hooks/useVADEngine';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
 import { normalizeFaqKey, findFaqHit } from '../hooks/useFaqResolver';
 import VoiceService from '../services/VoiceService';
-import { AppHeader }     from './AppHeader';
-import { LandingView }   from './LandingView';
-import { ConsoleView }   from './ConsoleView';
+import { AppHeader }      from './AppHeader';
+import { LandingView }    from './LandingView';
+import { ConsoleView }    from './ConsoleView';
 import { FallbackDrawer } from './FallbackDrawer';
-import { AppFooter }     from './AppFooter';
+import { AppFooter }      from './AppFooter';
 import type { Phase, AppLog } from '../types';
 
 const InTimeTecConsole: React.FC = () => {
   const [connected,  setConnected]  = useState(false);
   const [phase,      setPhase]      = useState<Phase>('idle');
   const [logs,       setLogs]       = useState<AppLog[]>([]);
-  const [dlUrl,      setDlUrl]      = useState<string | null>(null);
+  const [docUrls, setDocUrls] = useState<{ pdf: string | null; pptx: string | null }>({ pdf: null, pptx: null });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [amplitude,  setAmplitude]  = useState(1);
 
@@ -43,9 +43,11 @@ const InTimeTecConsole: React.FC = () => {
       const res = await VoiceService.sendChunk(blob, SESSION_ID);
       if (!vad.activeRef.current) return;
       if (res.status === 'success' && res.voice_response_url) {
-        if (res.user_said)       pushLog('USER',   res.user_said);
-        if (res.ai_response_text) pushLog('AI',     res.ai_response_text);
-        if (res.download_url)   { setDlUrl(res.download_url); pushLog('SYSTEM', 'Compliance report generated.'); }
+        if (res.user_said)        pushLog('USER', res.user_said);
+        if (res.ai_response_text) pushLog('AI',   res.ai_response_text);
+        setDocUrls({ pdf: res.download_url ?? null, pptx: res.pptx_url ?? null });
+        if (res.download_url) pushLog('SYSTEM', 'Compliance report generated.');
+        if (res.pptx_url)     pushLog('SYSTEM', 'Presentation generated.');
         player.play(res.voice_response_url);
       } else {
         setPhase('waiting');
@@ -70,7 +72,6 @@ const InTimeTecConsole: React.FC = () => {
       if (!vad.activeRef.current) return;
       if (data.audio_url) {
         pushLog('AI', 'Playing onboarding greeting.');
-        // Boot VAD pipeline only after welcome audio ends
         player.play(data.audio_url, () => { if (vad.activeRef.current) vad.startPipeline(); });
       } else {
         vad.startPipeline();
@@ -105,7 +106,9 @@ const InTimeTecConsole: React.FC = () => {
     if (!vad.activeRef.current) return;
     if (res.status === 'success' && res.voice_response_url) {
       if (res.ai_response_text) pushLog('AI', res.ai_response_text);
-      if (res.download_url)    { setDlUrl(res.download_url); pushLog('SYSTEM', 'Report ready.'); }
+      setDocUrls({ pdf: res.download_url ?? null, pptx: res.pptx_url ?? null });
+      if (res.download_url) pushLog('SYSTEM', 'Report ready.');
+      if (res.pptx_url)     pushLog('SYSTEM', 'Presentation ready.');
       player.play(res.voice_response_url);
     } else {
       setPhase('waiting');
@@ -123,7 +126,7 @@ const InTimeTecConsole: React.FC = () => {
         ? <LandingView onConnect={handleConnect} />
         : <ConsoleView
             phase={phase} amplitude={amplitude} logs={logs}
-            dlUrl={dlUrl} sessionId={SESSION_ID}
+            dlUrl={docUrls.pdf} pptxUrl={docUrls.pptx} sessionId={SESSION_ID}
             onDisconnect={handleDisconnect}
             onOpenDrawer={() => setDrawerOpen(true)}
           />

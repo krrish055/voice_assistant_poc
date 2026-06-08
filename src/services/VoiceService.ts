@@ -18,6 +18,7 @@ export interface StreamResponse {
   ai_response_text?: string;
   user_said?: string;
   download_url?: string | null;
+  pptx_url?: string | null;
 }
 
 // ── FAQ Knowledge Base (POC: hardcoded — production mein Redis cache se serve hoga) ──

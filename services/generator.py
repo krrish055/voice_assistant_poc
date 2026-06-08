@@ -14,6 +14,46 @@ def _sanitize(value: str) -> str:
 class GeneratorService:
 
     @staticmethod
+    def generate_dynamic_pptx(ai_data: dict, session_id: str) -> Path:
+        try:
+            from pptx import Presentation
+        except ImportError:
+            raise DocumentGenerationError("Critical dependency 'python-pptx' is missing.")
+        try:
+            Path(REPORTS_DIR).mkdir(parents=True, exist_ok=True)
+            target = safe_path(REPORTS_DIR, f'Presentation_{session_id}.pptx')
+
+            prs = Presentation()
+            prs.slide_width, prs.slide_height = 12192000, 6858000  # 13.333" x 7.5" in EMU
+
+            # Slide 1: Title
+            s1 = prs.slides.add_slide(prs.slide_layouts[0])
+            s1.shapes.title.text = _sanitize(ai_data.get('report_title', 'EXECUTIVE REPORT')).upper()
+            s1.placeholders[1].text = f'InTimeTec Compliance Node  |  Session: {session_id}'
+
+            # Slide 2: Executive Summary
+            s2 = prs.slides.add_slide(prs.slide_layouts[1])
+            s2.shapes.title.text = 'EXECUTIVE SUMMARY'
+            s2.placeholders[1].text = _sanitize(ai_data.get('ai_summary', 'No summary provided.'))
+
+            # Slide 3: Requirements Matrix
+            s3 = prs.slides.add_slide(prs.slide_layouts[1])
+            s3.shapes.title.text = 'REQUIREMENTS MATRIX'
+            tf = s3.placeholders[1].text_frame
+            tf.text = 'Extracted Specifications:'
+            for row in ai_data.get('structured_data', [])[:5]:
+                p = tf.add_paragraph()
+                p.text = f"• {_sanitize(row.get('item', 'Parameter'))}: {_sanitize(row.get('value', '—'))}"
+                p.level = 1
+
+            prs.save(str(target))
+            return target
+        except DocumentGenerationError:
+            raise
+        except Exception as e:
+            raise DocumentGenerationError(f'PPTX generation failed: {e}') from e
+
+    @staticmethod
     def generate_dynamic_pdf(ai_data: dict, session_id: str) -> str:
         try:
             Path(REPORTS_DIR).mkdir(parents=True, exist_ok=True)
