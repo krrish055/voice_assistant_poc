@@ -7,6 +7,19 @@ DEFAULT_MODEL   = 'llama-3.3-70b-versatile'
 LLM_TEMPERATURE = 0.4
 LLM_MAX_TOKENS  = 800
 
+# Speech processor
+MIN_AUDIO_BYTES_THRESHOLD = 5000
+MAX_TEXT_FALLBACK_LENGTH  = 4000
+
+# Presentation layout
+PPTX_EMU_WIDTH        = 12192000
+PPTX_EMU_HEIGHT       = 6858000
+MAX_MATRIX_DISPLAY_ROWS = 5
+DEFAULT_REPORT_TITLE  = 'EXECUTIVE REPORT'
+
+# Security
+AUDIO_FILE_SECURITY_REGEX = r'audio_[a-zA-Z0-9_\-]+\.mp3'
+
 
 def get_groq_api_key() -> str:
     key = os.getenv('GROQ_API_KEY')

@@ -11,6 +11,7 @@ from exceptions import DocumentGenerationError, PipelineError, StorageError
 from services import voice_pipeline, SpeechProcessorService, ResponseBuilderService
 from storage import get_conversations_by_user, get_session_history
 from utils import validate_session, safe_path, cleanup_old_audio, REPORTS_DIR
+from config import AUDIO_FILE_SECURITY_REGEX
 
 load_dotenv()
 
@@ -125,7 +126,7 @@ def download_pptx(session_id: str) -> FileResponse:
 
 @app.get('/api/voice/stream-audio/{filename}')
 def stream_audio(filename: str) -> FileResponse:
-    if not re.fullmatch(r'audio_[a-zA-Z0-9_\-]+\.mp3', filename):
+    if not re.fullmatch(AUDIO_FILE_SECURITY_REGEX, filename):
         raise HTTPException(status_code=400, detail='Invalid audio resource.')
     path = safe_path(REPORTS_DIR, filename)
     if not path.exists():

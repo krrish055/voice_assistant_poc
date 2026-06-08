@@ -5,7 +5,7 @@ from fastapi import HTTPException, UploadFile
 from groq import Groq
 import edge_tts
 
-from config import get_groq_api_key, get_stt_model
+from config import get_groq_api_key, get_stt_model, MIN_AUDIO_BYTES_THRESHOLD, MAX_TEXT_FALLBACK_LENGTH
 from utils import REPORTS_DIR, ALLOWED_AUDIO_MIME, ALLOWED_AUDIO_EXT, safe_path
 
 _REPORTS_BASE = Path(REPORTS_DIR).resolve()
@@ -26,7 +26,7 @@ class SpeechProcessorService:
     ) -> str:
         """Extract transcript from text fallback or audio blob. Returns empty string on silence."""
         if text_fallback and text_fallback.strip():
-            return text_fallback.strip()[:4000]
+            return text_fallback.strip()[:MAX_TEXT_FALLBACK_LENGTH]
 
         if not audio_blob:
             return ''
@@ -35,7 +35,7 @@ class SpeechProcessorService:
             raise HTTPException(status_code=400, detail='Invalid audio format.')
 
         audio_bytes = await audio_blob.read()
-        if len(audio_bytes) < 5000:
+        if len(audio_bytes) < MIN_AUDIO_BYTES_THRESHOLD:
             return ''
 
         ext = Path(audio_blob.filename or '').suffix.lower()
