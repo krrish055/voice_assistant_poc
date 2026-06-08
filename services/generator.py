@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fpdf import FPDF
 
+from config import PPTX_EMU_WIDTH, PPTX_EMU_HEIGHT, MAX_MATRIX_DISPLAY_ROWS, DEFAULT_REPORT_TITLE
 from exceptions import DocumentGenerationError
 from utils import safe_path, REPORTS_DIR
 
@@ -24,11 +25,11 @@ class GeneratorService:
             target = safe_path(REPORTS_DIR, f'Presentation_{session_id}.pptx')
 
             prs = Presentation()
-            prs.slide_width, prs.slide_height = 12192000, 6858000  # 13.333" x 7.5" in EMU
+            prs.slide_width, prs.slide_height = PPTX_EMU_WIDTH, PPTX_EMU_HEIGHT
 
             # Slide 1: Title
             s1 = prs.slides.add_slide(prs.slide_layouts[0])
-            s1.shapes.title.text = _sanitize(ai_data.get('report_title', 'EXECUTIVE REPORT')).upper()
+            s1.shapes.title.text = _sanitize(ai_data.get('report_title', DEFAULT_REPORT_TITLE)).upper()
             s1.placeholders[1].text = f'InTimeTec Compliance Node  |  Session: {session_id}'
 
             # Slide 2: Executive Summary
@@ -41,7 +42,7 @@ class GeneratorService:
             s3.shapes.title.text = 'REQUIREMENTS MATRIX'
             tf = s3.placeholders[1].text_frame
             tf.text = 'Extracted Specifications:'
-            for row in ai_data.get('structured_data', [])[:5]:
+            for row in ai_data.get('structured_data', [])[:MAX_MATRIX_DISPLAY_ROWS]:
                 p = tf.add_paragraph()
                 p.text = f"• {_sanitize(row.get('item', 'Parameter'))}: {_sanitize(row.get('value', '—'))}"
                 p.level = 1
@@ -64,7 +65,7 @@ class GeneratorService:
 
             pdf.set_font('Arial', size=18, style='B')
             pdf.set_text_color(44, 62, 80)
-            pdf.cell(0, 15, txt=_sanitize(ai_data.get('report_title', 'EXECUTIVE REPORT')).upper(), ln=True, align='C')
+            pdf.cell(0, 15, txt=_sanitize(ai_data.get('report_title', DEFAULT_REPORT_TITLE)).upper(), ln=True, align='C')
             pdf.ln(3)
 
             pdf.set_font('Arial', size=10, style='I')
