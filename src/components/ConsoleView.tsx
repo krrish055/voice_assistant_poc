@@ -10,6 +10,7 @@ interface Props {
   amplitude   : number;
   logs        : AppLog[];
   dlUrl       : string | null;
+  pptxUrl     : string | null;
   sessionId   : string;
   onDisconnect: () => void;
   onOpenDrawer: () => void;
@@ -28,7 +29,7 @@ const LOG_COLOR: Record<AppLog['source'], string> = {
   SYSTEM: T.colors.textMuted + '55',
 };
 
-export const ConsoleView: React.FC<Props> = ({ phase, amplitude, logs, dlUrl, sessionId, onDisconnect, onOpenDrawer }) => {
+export const ConsoleView: React.FC<Props> = ({ phase, amplitude, logs, dlUrl, pptxUrl, sessionId, onDisconnect, onOpenDrawer }) => {
   const color = PHASE_COLOR[phase];
   const glow  = PHASE_GLOW[phase];
 
@@ -90,6 +91,17 @@ export const ConsoleView: React.FC<Props> = ({ phase, amplitude, logs, dlUrl, se
             transition: T.transitions,
           }}>
             ↓ Download Compliance Report
+          </a>
+        )}
+        {pptxUrl && (
+          <a href={VoiceService.fullUrl(pptxUrl)} target="_blank" rel="noreferrer" style={{
+            marginTop: 10, display: 'flex', alignItems: 'center', gap: 8,
+            padding: '10px 22px', borderRadius: 12,
+            background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.3)',
+            color: '#6366F1', fontSize: 13, fontWeight: 600, textDecoration: 'none',
+            transition: T.transitions,
+          }}>
+            ↓ Download Presentation
           </a>
         )}
       </div>

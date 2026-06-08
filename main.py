@@ -112,6 +112,17 @@ def download_report(session_id: str) -> FileResponse:
     return FileResponse(str(file_path), media_type='application/pdf', filename=f'Report_{session_id}.pdf')
 
 
+@app.get('/api/voice/download-pptx/{session_id}')
+def download_pptx(session_id: str) -> FileResponse:
+    validate_session(session_id)
+    file_path = safe_path(REPORTS_DIR, f'Presentation_{session_id}.pptx')
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail='Presentation asset not found.')
+    return FileResponse(str(file_path),
+                        media_type='application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                        filename=f'Presentation_{session_id}.pptx')
+
+
 @app.get('/api/voice/stream-audio/{filename}')
 def stream_audio(filename: str) -> FileResponse:
     if not re.fullmatch(r'audio_[a-zA-Z0-9_\-]+\.mp3', filename):

@@ -47,11 +47,16 @@ STEP 2 — For REPORT_REQUEST only, decide if you have ALL the necessary data to
 - "data_complete": true — You have enough information to build the full report immediately.
 - "data_complete": false — Critical information is still missing; ask the user follow-up questions first.
 
-STEP 3 — Return ONLY valid JSON (no markdown, no extra text):
+STEP 3 — For REPORT_REQUEST, detect the output format from the user's words:
+- "output_format": "PPTX" — if user says PPT, PowerPoint, presentation, slides
+- "output_format": "PDF"  — if user says PDF, report, document, summary (default if unclear)
+
+STEP 4 — Return ONLY valid JSON (no markdown, no extra text):
 {
     "intent": "CHAT" | "REPORT_REQUEST" | "RESTRICTED_REQUEST",
     "data_complete": true/false,
     "is_restricted_query": true/false,
+    "output_format": "PDF" | "PPTX",
     "report_title": "string or null",
     "confidence_score": float (0.8-1.0 for complete REPORT_REQUEST; 0.0-0.4 for RESTRICTED; 1.0 for CHAT),
     "structured_data": [{"item": "Parameter", "value": "Value"}],
