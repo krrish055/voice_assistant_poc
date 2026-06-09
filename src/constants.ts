@@ -7,10 +7,10 @@ export const SESSION_ID    = 'ITT_' + Date.now();
 
 export const VAD_CONFIG = {
   SPEECH_START_MS : 200,
-  SPEECH_STOP_MS  : 2200,
+  SPEECH_STOP_MS  : 1800,
   MAX_RECORD_MS   : 25000,
   CALIB_FRAMES    : 90,
-  NOISE_MULT      : 1.6,
+  NOISE_OFFSET    : 10,
   FFT_SIZE        : 256,
 } as const;
 
