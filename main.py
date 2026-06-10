@@ -4,9 +4,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 
-from exceptions import DocumentGenerationError, PipelineError, StorageError
+from exceptions import AppBaseException
+from handlers import global_app_exception_handler
 from services import voice_pipeline, SpeechProcessorService, ResponseBuilderService
 from storage import get_conversations_by_user, get_session_history
 from utils import validate_session, safe_path, cleanup_old_audio, REPORTS_DIR
@@ -26,23 +27,9 @@ app.add_middleware(
 )
 
 
-# ── Exception Handlers ────────────────────────────────────────────────────────
+# ── Exception Handler ─────────────────────────────────────────────────────────
 
-@app.exception_handler(PipelineError)
-async def pipeline_error_handler(req: Request, exc: PipelineError) -> JSONResponse:
-    return JSONResponse(status_code=500, content={'status': 'error', 'message': str(exc)})
-
-@app.exception_handler(StorageError)
-async def storage_error_handler(req: Request, exc: StorageError) -> JSONResponse:
-    return JSONResponse(status_code=500, content={'status': 'error', 'message': str(exc)})
-
-@app.exception_handler(DocumentGenerationError)
-async def document_error_handler(req: Request, exc: DocumentGenerationError) -> JSONResponse:
-    return JSONResponse(status_code=500, content={'status': 'error', 'message': str(exc)})
-
-@app.exception_handler(ValueError)
-async def value_error_handler(req: Request, exc: ValueError) -> JSONResponse:
-    return JSONResponse(status_code=400, content={'status': 'error', 'message': str(exc)})
+app.add_exception_handler(AppBaseException, global_app_exception_handler)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
