@@ -1,5 +1,6 @@
 // ── C4: ConsoleView Component ─────────────────────────────────────────────────
 import React from 'react';
+import { Mic, MicOff } from 'lucide-react';
 import { ITT_THEME as T } from '../theme';
 import { PHASE_COLOR, PHASE_GLOW, PHASE_LABEL, PHASE_STATUS_TEXT } from '../constants';
 import VoiceService from '../services/VoiceService';
@@ -12,8 +13,10 @@ interface Props {
   dlUrl       : string | null;
   pptxUrl     : string | null;
   sessionId   : string;
+  isMuted     : boolean;
   onDisconnect: () => void;
   onOpenDrawer: () => void;
+  onToggleMute: () => void;
 }
 
 const cardBase: React.CSSProperties = {
@@ -29,7 +32,7 @@ const LOG_COLOR: Record<AppLog['source'], string> = {
   SYSTEM: T.colors.textMuted + '55',
 };
 
-export const ConsoleView: React.FC<Props> = ({ phase, amplitude, logs, dlUrl, pptxUrl, sessionId, onDisconnect, onOpenDrawer }) => {
+export const ConsoleView: React.FC<Props> = ({ phase, amplitude, logs, dlUrl, pptxUrl, sessionId, isMuted, onDisconnect, onOpenDrawer, onToggleMute }) => {
   const color = PHASE_COLOR[phase];
   const glow  = PHASE_GLOW[phase];
 
@@ -81,6 +84,20 @@ export const ConsoleView: React.FC<Props> = ({ phase, amplitude, logs, dlUrl, pp
         <p style={{ color: T.colors.textMuted, fontSize: 13, margin: 0 }}>
           Hands-free · Client-side VAD · {sessionId.slice(-10)}
         </p>
+
+        <button onClick={onToggleMute} title={isMuted ? 'Unmute microphone' : 'Mute microphone'} style={{
+          marginTop: 24,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          padding: '10px 24px', borderRadius: 24, border: 'none', cursor: 'pointer',
+          fontWeight: 700, fontSize: 13, letterSpacing: '0.3px',
+          backgroundColor: isMuted ? T.colors.restrictedRed : T.colors.accentBlue,
+          color: '#fff',
+          boxShadow: isMuted ? `0 0 18px ${T.colors.restrictedRed}66` : `0 0 18px ${T.colors.accentBlue}66`,
+          transition: T.transitions,
+        }}>
+          {isMuted ? <MicOff size={16} /> : <Mic size={16} />}
+          {isMuted ? 'Unmute' : 'Mute'}
+        </button>
 
         {dlUrl && (
           <a href={VoiceService.fullUrl(dlUrl)} target="_blank" rel="noreferrer" style={{

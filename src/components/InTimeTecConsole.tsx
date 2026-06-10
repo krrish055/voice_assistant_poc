@@ -23,6 +23,7 @@ const InTimeTecConsole: React.FC = () => {
   const [docUrls, setDocUrls] = useState<{ pdf: string | null; pptx: string | null }>({ pdf: null, pptx: null });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [amplitude,  setAmplitude]  = useState(1);
+  const [isMuted,    setIsMuted]    = useState(false);
 
   const pushLog = useCallback((source: AppLog['source'], message: string) => {
     setLogs(prev => [{ id: mkId(), source, message, ts: new Date().toLocaleTimeString() }, ...prev.slice(0, 79)]);
@@ -84,9 +85,16 @@ const InTimeTecConsole: React.FC = () => {
     }
   }, [vad, player, pushLog]);
 
+  const toggleMute = useCallback(() => {
+    const stream = vad.streamRef.current;
+    if (!stream) return;
+    stream.getAudioTracks().forEach(track => { track.enabled = isMuted; });
+    setIsMuted(prev => !prev);
+  }, [vad, isMuted]);
+
   const handleDisconnect = useCallback(() => {
     vad.teardown(); player.stop();
-    setConnected(false); setDrawerOpen(false);
+    setConnected(false); setDrawerOpen(false); setIsMuted(false);
   }, [vad, player]);
 
   const handleDispatch = useCallback(async (text: string) => {
@@ -129,8 +137,10 @@ const InTimeTecConsole: React.FC = () => {
         : <ConsoleView
             phase={phase} amplitude={amplitude} logs={logs}
             dlUrl={docUrls.pdf} pptxUrl={docUrls.pptx} sessionId={SESSION_ID}
+            isMuted={isMuted}
             onDisconnect={handleDisconnect}
             onOpenDrawer={() => setDrawerOpen(true)}
+            onToggleMute={toggleMute}
           />
       }
       <AppFooter />

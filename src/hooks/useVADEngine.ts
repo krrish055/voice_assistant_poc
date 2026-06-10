@@ -156,5 +156,5 @@ export function useVADEngine(cb: VADCallbacks) {
     cb.onLog('Audio pipeline isolated. Hardware resources freed.');
   }, [clearTimers, cb]);
 
-  return { activeRef, setPhase, startPipeline, teardown, clearTimers, recRef };
+  return { activeRef, setPhase, startPipeline, teardown, clearTimers, recRef, streamRef };
 }
