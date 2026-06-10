@@ -31,7 +31,7 @@ class SpeechProcessorService:
         if not audio_blob:
             return ''
 
-        if audio_blob.content_type and audio_blob.content_type not in ALLOWED_AUDIO_MIME:
+        if audio_blob.content_type and audio_blob.content_type.split(';')[0].strip() not in ALLOWED_AUDIO_MIME:
             raise HTTPException(status_code=400, detail='Invalid audio format.')
 
         audio_bytes = await audio_blob.read()
@@ -45,12 +45,15 @@ class SpeechProcessorService:
         temp_path = safe_path(REPORTS_DIR, f'input_{session_id}{ext}')
         try:
             temp_path.write_bytes(audio_bytes)
-            return SpeechProcessorService.speech_to_text(str(temp_path))
+            transcript = SpeechProcessorService.speech_to_text(str(temp_path))
+            print(f'[STT] content_type={audio_blob.content_type} ext={ext} size={len(audio_bytes)} transcript="{transcript[:80]}"')
+            return transcript
         finally:
             temp_path.unlink(missing_ok=True)
 
     @staticmethod
     def speech_to_text(audio_file_path: str) -> str:
+        _WHISPER_NOISE = {'thank you', 'thanks for watching', 'you', 'bye', '.', '...', 'uh', 'um'}
         if not Path(audio_file_path).exists():
             return ''
         try:
@@ -61,7 +64,10 @@ class SpeechProcessorService:
                     file=f,
                     response_format='text',
                 )
-            return str(result).strip()
+            transcript = str(result).strip()
+            if transcript.lower() in _WHISPER_NOISE or len(transcript) < 3:
+                return ''
+            return transcript
         except Exception as e:
             print(f'[STT] Error: {e}')
             return ''

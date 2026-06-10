@@ -130,7 +130,7 @@ export function useVADEngine(cb: VADCallbacks) {
         analyser.getByteFrequencyData(buf);
         sum += buf.reduce((s, v) => s + v, 0) / buf.length;
         if (++frames < VAD_CONFIG.CALIB_FRAMES) { requestAnimationFrame(calibTick); return; }
-        noiseFloor.current = Math.min(55, Math.max(12, (sum / frames) * VAD_CONFIG.NOISE_MULT));
+        noiseFloor.current = (sum / frames) + VAD_CONFIG.NOISE_OFFSET;
         cb.onLog(`Noise floor calibrated: ${noiseFloor.current.toFixed(1)}`);
         setPhase('waiting');
         cb.onLog('VAD loop active. Speak to begin.');
@@ -156,5 +156,5 @@ export function useVADEngine(cb: VADCallbacks) {
     cb.onLog('Audio pipeline isolated. Hardware resources freed.');
   }, [clearTimers, cb]);
 
-  return { activeRef, startPipeline, teardown, clearTimers, recRef };
+  return { activeRef, setPhase, startPipeline, teardown, clearTimers, recRef };
 }

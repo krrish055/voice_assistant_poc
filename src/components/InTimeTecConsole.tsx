@@ -30,7 +30,7 @@ const InTimeTecConsole: React.FC = () => {
 
   const player = useAudioPlayer({
     onPhase: setPhase,
-    onDone : () => { setPhase('waiting'); pushLog('SYSTEM', 'VAD loop active. Speak to begin.'); },
+    onDone : () => { vad.setPhase('waiting'); setPhase('waiting'); pushLog('SYSTEM', 'VAD loop active. Speak to begin.'); },
   });
 
   const vad = useVADEngine({
@@ -50,6 +50,7 @@ const InTimeTecConsole: React.FC = () => {
         if (res.pptx_url)     pushLog('SYSTEM', 'Presentation generated.');
         player.play(res.voice_response_url);
       } else {
+        vad.setPhase('waiting');
         setPhase('waiting');
         pushLog('SYSTEM', 'Silent sample received. Re-arming VAD.');
       }
@@ -111,8 +112,9 @@ const InTimeTecConsole: React.FC = () => {
       if (res.pptx_url)     pushLog('SYSTEM', 'Presentation ready.');
       player.play(res.voice_response_url);
     } else {
-      setPhase('waiting');
-    }
+        vad.setPhase('waiting');
+        setPhase('waiting');
+      }
   }, [vad, player, pushLog]);
 
   return (
