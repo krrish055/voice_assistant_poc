@@ -4,7 +4,7 @@ import { ITT_THEME as T } from '../theme';
 import { SESSION_ID } from '../constants';
 import { useVADEngine, mkId } from '../hooks/useVADEngine';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
-import { normalizeFaqKey, findFaqHit } from '../hooks/useFaqResolver';
+import { normalizeFaqKey, findFaqHit, loadFaqMap } from '../hooks/useFaqResolver';
 import VoiceService from '../services/VoiceService';
 import { AppHeader }   from './AppHeader';
 import { LandingView } from './LandingView';
@@ -20,7 +20,9 @@ const InTimeTecConsole: React.FC = () => {
   const [amplitude,      setAmplitude]      = useState(1);
   const [isMicMuted,     setIsMicMuted]     = useState(false);
   const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
+  const [faqMap,         setFaqMap]         = useState<Record<string, string>>({});
   const speakerMutedRef = useRef(false);
+  const userId = 'user_open_mic';
 
   const pushLog = useCallback((source: AppLog['source'], message: string) => {
     setLogs(prev => [{ id: mkId(), source, message, ts: new Date().toLocaleTimeString() }, ...prev.slice(0, 79)]);
@@ -38,7 +40,7 @@ const InTimeTecConsole: React.FC = () => {
     onBlob     : async (blob) => {
       setPhase('processing');
       pushLog('SYSTEM', `Dispatching ${(blob.size / 1024).toFixed(1)} KB to pipeline…`);
-      const res = await VoiceService.sendChunk(blob, SESSION_ID);
+      const res = await VoiceService.sendChunk(blob, userId, SESSION_ID);
       if (!vad.activeRef.current) return;
       if (res.status === 'success' && res.voice_response_url) {
         if (res.user_said)        pushLog('USER', res.user_said);
@@ -63,6 +65,7 @@ const InTimeTecConsole: React.FC = () => {
     vad.activeRef.current = player.activeRef.current = true;
     setPhase('processing');
     pushLog('SYSTEM', 'Initializing compliance node…');
+    loadFaqMap().then(setFaqMap);
     try {
       const data = await VoiceService.fetchWelcome();
       if (!vad.activeRef.current) return;
@@ -99,7 +102,7 @@ const InTimeTecConsole: React.FC = () => {
 
   const handleDispatch = useCallback(async (text: string) => {
     pushLog('USER', text);
-    const faqHit = findFaqHit(normalizeFaqKey(text));
+    const faqHit = findFaqHit(normalizeFaqKey(text), faqMap);
     if (faqHit) {
       pushLog('AI', faqHit);
       setPhase('processing');
@@ -113,7 +116,7 @@ const InTimeTecConsole: React.FC = () => {
     vad.clearTimers();
     if (vad.recRef.current?.state === 'recording') { vad.recRef.current.onstop = null; vad.recRef.current.stop(); }
     setPhase('processing');
-    const res = await VoiceService.sendText(text, SESSION_ID);
+    const res = await VoiceService.sendText(text, userId, SESSION_ID);
     if (!vad.activeRef.current) return;
     if (res.status === 'success' && res.voice_response_url) {
       if (res.ai_response_text) pushLog('AI', res.ai_response_text);
@@ -123,7 +126,7 @@ const InTimeTecConsole: React.FC = () => {
       player.play(res.voice_response_url);
       if (speakerMutedRef.current) setTimeout(() => { if (player.audioRef.current) player.audioRef.current.volume = 0; }, 0);
     } else { vad.setPhase('waiting'); setPhase('waiting'); }
-  }, [vad, player, pushLog]);
+  }, [vad, player, pushLog, faqMap]);
 
   return (
     <div style={{

@@ -36,6 +36,11 @@ def get_stt_model() -> str:
     return os.getenv('WHISPER_MODEL', 'whisper-large-v3')
 
 
+def get_allowed_origins() -> list[str]:
+    raw = os.getenv('ALLOWED_ORIGINS', 'http://localhost:3000')
+    return [o.strip() for o in raw.split(',') if o.strip()]
+
+
 def get_livekit_credentials() -> dict:
     api_key    = os.getenv('LIVEKIT_API_KEY')
     api_secret = os.getenv('LIVEKIT_API_SECRET')

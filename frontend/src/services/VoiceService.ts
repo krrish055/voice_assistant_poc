@@ -3,7 +3,6 @@ const _RAW_API = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 const API = (() => {
   try {
     const url = new URL(_RAW_API);
-    // Only allow http/https and known safe origins
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error();
     return url.origin;
   } catch {
@@ -21,38 +20,27 @@ export interface StreamResponse {
   pptx_url?: string | null;
 }
 
-// ── FAQ Knowledge Base (POC: hardcoded — production mein Redis cache se serve hoga) ──
-// NOTE: Ye answers abhi client-side map mein hain for POC demo.
-// Production architecture mein ye Redis hash (faq:<normalized_key> -> answer)
-// mein store honge aur backend /api/faq/lookup endpoint ke through serve honge.
-export const FAQ_MAP: Record<string, string> = {
-  'what services does intimetec offer':
-    'InTimeTec offers end-to-end software engineering, AI & cognitive automation pipelines, security compliance consulting, cloud infrastructure, and product development — serving clients across the US, India, UAE, Saudi Arabia, Netherlands, Australia, South Korea, and Colombia.',
-
-  'how can ai help my compliance process':
-    'Our AI compliance engine automates audit trail generation, flags policy deviations in real time, transcribes and classifies voice inputs into structured reports, and reduces manual review effort by up to 80% — all hands-free via our voice pipeline.',
-
-  'can i generate a report from this session':
-    '__BYPASS_FAQ__',
-
-  'what industries does intimetec serve':
-    'InTimeTec serves Healthcare, Government & Public Sector, Agriculture Technology, Logistics & Dispatch, Finance, and Enterprise IT. Products like NextGen Ag Tech, Court Access Tracking System, and ClearSpend are purpose-built for these verticals.',
-
-  'how do i get started with intimetec':
-    'You can start right here — this voice session connects you directly to our AI compliance node. For enterprise onboarding, visit intimetec.com or speak your requirements now and our system will generate a structured intake report automatically.',
-};
-
 const VoiceService = {
   fullUrl: (path: string) => `${API}${path}`,
+
+  async fetchFaq(): Promise<Record<string, string>> {
+    try {
+      const res = await fetch(`${API}/api/faq`);
+      if (!res.ok) return {};
+      return res.json();
+    } catch {
+      return {};
+    }
+  },
 
   async fetchWelcome(): Promise<StreamResponse> {
     const res = await fetch(`${API}/api/voice/welcome`);
     return res.json();
   },
 
-  async sendChunk(blob: Blob, sessionId: string): Promise<StreamResponse> {
+  async sendChunk(blob: Blob, userId: string, sessionId: string): Promise<StreamResponse> {
     const form = new FormData();
-    form.append('userId', 'user_open_mic');
+    form.append('userId', userId);
     form.append('sessionId', sessionId);
     form.append('audio_blob', blob, 'chunk.webm');
     try {
@@ -78,9 +66,9 @@ const VoiceService = {
     }
   },
 
-  async sendText(text: string, sessionId: string): Promise<StreamResponse> {
+  async sendText(text: string, userId: string, sessionId: string): Promise<StreamResponse> {
     const form = new FormData();
-    form.append('userId', 'user_open_mic');
+    form.append('userId', userId);
     form.append('sessionId', sessionId);
     form.append('text_fallback', text);
     try {

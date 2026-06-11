@@ -11,7 +11,7 @@ from handlers import global_app_exception_handler
 from services import voice_pipeline, SpeechProcessorService, ResponseBuilderService
 from storage import get_conversations_by_user, get_session_history
 from utils import validate_session, safe_path, cleanup_old_audio, REPORTS_DIR
-from config import AUDIO_FILE_SECURITY_REGEX
+from config import AUDIO_FILE_SECURITY_REGEX, get_allowed_origins
 from schemas import VoiceStreamPayload, VoiceEnvelopeResponse, WelcomeResponse, TTSResponse, TokenResponse
 
 from prompts.system_prompts import WELCOME_TEXT
@@ -22,7 +22,7 @@ app = FastAPI(title='InTimeTec AI Voice Node Gateway')
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['http://localhost:3000'],
+    allow_origins=get_allowed_origins(),
     allow_credentials=False,
     allow_methods=['GET', 'POST'],
     allow_headers=['*'],

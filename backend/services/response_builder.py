@@ -21,7 +21,7 @@ class ResponseBuilderService:
         if is_restricted:
             save_turn({'user_id': user_id, 'session_id': session_id, 'user_input': transcript,
                        'ai_response_text': ai_response_text, 'intent': intent,
-                       'ai_data': ai_data, 'status': 'PENDING_KRRISH_APPROVAL'})
+                       'ai_data': ai_data, 'status': 'PENDING_ADMIN_APPROVAL'})
             download_url = None
         else:
             status = 'CHAT' if intent == 'CHAT' else ('APPROVED' if ai_data.get('data_complete') else 'GATHERING')
