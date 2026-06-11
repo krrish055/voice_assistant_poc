@@ -60,14 +60,16 @@ class VoicePipelineOrchestrator(BasePipeline):
         except Exception as e:
             raise LLMProcessingError(f'Groq API call failed: {e}') from e
 
+        raw_content = response.choices[0].message.content.strip()
         try:
-            ai_data = json.loads(self._strip_markdown(response.choices[0].message.content.strip()))
-        except (json.JSONDecodeError, ValueError) as e:
-            raise LLMProcessingError(f'Failed to parse LLM response as JSON: {e}') from e
+            ai_data = json.loads(self._strip_markdown(raw_content))
+        except (json.JSONDecodeError, ValueError):
+            # LLM returned plain text instead of JSON — treat it as a CHAT response
+            ai_data = {'intent': 'CHAT', 'ai_response_text': raw_content, 'confidence_score': 1.0}
 
         return PipelineResponse(
             status='success',
-            ai_response_text=ai_data.get('ai_response_text', 'I have processed your request.'),
+            ai_response_text=ai_data.get('ai_response_text') or raw_content,
             confidence_score=float(ai_data.get('confidence_score', 1.0)),
             data=ai_data,
         ).model_dump()
