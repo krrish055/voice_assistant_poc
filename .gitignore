@@ -1,0 +1,28 @@
+# Local Virtual Environments
+backend/venv/
+.venv/
+env/
+ENV/
+
+# Node Modules (Frontend)
+frontend/node_modules/
+node_modules/
+
+# Frontend Production Builds (Only code goes to Git, build stays local/pipeline)
+frontend/build/
+frontend/dist/
+
+# Application Generated Artifacts & Media (Kachra files block)
+backend/reports/*.mp3
+backend/reports/*.pptx
+backend/reports/*.pdf
+backend/db.json
+
+# Environment Secrets
+.env
+backend/.env
+
+# Python Cache & OS files
+__pycache__/
+*.pyc
+.DS_Store
