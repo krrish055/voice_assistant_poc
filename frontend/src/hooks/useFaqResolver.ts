@@ -8,8 +8,8 @@ export const normalizeFaqKey = (text: string): string =>
   text.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
 
 export const findFaqHit = (key: string): string | undefined => {
-  if (FAQ_MAP[key]) return FAQ_MAP[key];
-  return Object.entries(FAQ_MAP).find(
+  const hit = FAQ_MAP[key] ?? Object.entries(FAQ_MAP).find(
     ([k]) => key.includes(k) || k.includes(key)
   )?.[1];
+  return hit === '__BYPASS_FAQ__' ? undefined : hit;
 };

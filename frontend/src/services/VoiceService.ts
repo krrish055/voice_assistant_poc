@@ -33,7 +33,7 @@ export const FAQ_MAP: Record<string, string> = {
     'Our AI compliance engine automates audit trail generation, flags policy deviations in real time, transcribes and classifies voice inputs into structured reports, and reduces manual review effort by up to 80% — all hands-free via our voice pipeline.',
 
   'can i generate a report from this session':
-    'Yes! Once your voice session completes, the system automatically generates a structured PDF compliance report. You will see a "Download Compliance Report" button appear on the console as soon as it is ready.',
+    '__BYPASS_FAQ__',
 
   'what industries does intimetec serve':
     'InTimeTec serves Healthcare, Government & Public Sector, Agriculture Technology, Logistics & Dispatch, Finance, and Enterprise IT. Products like NextGen Ag Tech, Court Access Tracking System, and ClearSpend are purpose-built for these verticals.',
