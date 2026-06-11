@@ -1,29 +1,26 @@
 // ── C4: InTimeTecConsole — System Orchestrator ────────────────────────────────
-// Single Responsibility: wires hooks to sub-components. Zero UI logic here.
-// Dependency Inversion: depends on abstractions (hooks/services), not concretions.
-
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ITT_THEME as T } from '../theme';
 import { SESSION_ID } from '../constants';
 import { useVADEngine, mkId } from '../hooks/useVADEngine';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
 import { normalizeFaqKey, findFaqHit } from '../hooks/useFaqResolver';
 import VoiceService from '../services/VoiceService';
-import { AppHeader }      from './AppHeader';
-import { LandingView }    from './LandingView';
-import { ConsoleView }    from './ConsoleView';
-import { FallbackDrawer } from './FallbackDrawer';
-import { AppFooter }      from './AppFooter';
+import { AppHeader }   from './AppHeader';
+import { LandingView } from './LandingView';
+import { ConsoleView } from './ConsoleView';
+import { AppFooter }   from './AppFooter';
 import type { Phase, AppLog } from '../types';
 
 const InTimeTecConsole: React.FC = () => {
-  const [connected,  setConnected]  = useState(false);
-  const [phase,      setPhase]      = useState<Phase>('idle');
-  const [logs,       setLogs]       = useState<AppLog[]>([]);
-  const [docUrls, setDocUrls] = useState<{ pdf: string | null; pptx: string | null }>({ pdf: null, pptx: null });
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [amplitude,  setAmplitude]  = useState(1);
-  const [isMuted,    setIsMuted]    = useState(false);
+  const [connected,      setConnected]      = useState(false);
+  const [phase,          setPhase]          = useState<Phase>('idle');
+  const [logs,           setLogs]           = useState<AppLog[]>([]);
+  const [docUrls,        setDocUrls]        = useState<{ pdf: string | null; pptx: string | null }>({ pdf: null, pptx: null });
+  const [amplitude,      setAmplitude]      = useState(1);
+  const [isMicMuted,     setIsMicMuted]     = useState(false);
+  const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
+  const speakerMutedRef = useRef(false);
 
   const pushLog = useCallback((source: AppLog['source'], message: string) => {
     setLogs(prev => [{ id: mkId(), source, message, ts: new Date().toLocaleTimeString() }, ...prev.slice(0, 79)]);
@@ -31,7 +28,7 @@ const InTimeTecConsole: React.FC = () => {
 
   const player = useAudioPlayer({
     onPhase: setPhase,
-    onDone : () => { vad.setPhase('waiting'); setPhase('waiting'); pushLog('SYSTEM', 'VAD loop active. Speak to begin.'); },
+    onDone:  () => { vad.setPhase('waiting'); setPhase('waiting'); pushLog('SYSTEM', 'VAD loop active. Speak to begin.'); },
   });
 
   const vad = useVADEngine({
@@ -50,51 +47,54 @@ const InTimeTecConsole: React.FC = () => {
         if (res.download_url) pushLog('SYSTEM', 'Compliance report generated.');
         if (res.pptx_url)     pushLog('SYSTEM', 'Presentation generated.');
         player.play(res.voice_response_url);
+        if (speakerMutedRef.current) setTimeout(() => { if (player.audioRef.current) player.audioRef.current.volume = 0; }, 0);
       } else {
-        vad.setPhase('waiting');
-        setPhase('waiting');
+        vad.setPhase('waiting'); setPhase('waiting');
         pushLog('SYSTEM', 'Silent sample received. Re-arming VAD.');
       }
     },
   });
 
-  // Sync player's activeRef with vad's activeRef
   useEffect(() => { player.activeRef.current = vad.activeRef.current; });
-
-  useEffect(() => () => { vad.teardown(); player.stop(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { vad.teardown(); player.stop(); }, []); // eslint-disable-line
 
   const handleConnect = useCallback(async () => {
     setConnected(true);
-    vad.activeRef.current    = true;
-    player.activeRef.current = true;
+    vad.activeRef.current = player.activeRef.current = true;
     setPhase('processing');
-    pushLog('SYSTEM', 'Initializing compliance node authentication…');
+    pushLog('SYSTEM', 'Initializing compliance node…');
     try {
       const data = await VoiceService.fetchWelcome();
       if (!vad.activeRef.current) return;
       if (data.audio_url) {
         pushLog('AI', 'Playing onboarding greeting.');
         player.play(data.audio_url, () => { if (vad.activeRef.current) vad.startPipeline(); });
-      } else {
-        vad.startPipeline();
-      }
+        if (speakerMutedRef.current) setTimeout(() => { if (player.audioRef.current) player.audioRef.current.volume = 0; }, 0);
+      } else { vad.startPipeline(); }
     } catch (e: any) {
       pushLog('SYSTEM', `Handshake failed: ${e?.message ?? e}`);
-      vad.teardown(); player.stop();
-      setConnected(false);
+      vad.teardown(); player.stop(); setConnected(false);
     }
   }, [vad, player, pushLog]);
 
-  const toggleMute = useCallback(() => {
+  const toggleMic = useCallback(() => {
     const stream = vad.streamRef.current;
     if (!stream) return;
-    stream.getAudioTracks().forEach(track => { track.enabled = isMuted; });
-    setIsMuted(prev => !prev);
-  }, [vad, isMuted]);
+    stream.getAudioTracks().forEach(t => { t.enabled = isMicMuted; });
+    setIsMicMuted(prev => !prev);
+  }, [vad, isMicMuted]);
+
+  const toggleSpeaker = useCallback(() => {
+    const nowMuting = !speakerMutedRef.current;
+    speakerMutedRef.current = nowMuting;
+    setIsSpeakerMuted(nowMuting);
+    if (player.audioRef.current) player.audioRef.current.volume = nowMuting ? 0 : 1;
+  }, [player]);
 
   const handleDisconnect = useCallback(() => {
     vad.teardown(); player.stop();
-    setConnected(false); setDrawerOpen(false); setIsMuted(false);
+    setConnected(false); setIsMicMuted(false); setIsSpeakerMuted(false);
+    speakerMutedRef.current = false;
   }, [vad, player]);
 
   const handleDispatch = useCallback(async (text: string) => {
@@ -104,8 +104,10 @@ const InTimeTecConsole: React.FC = () => {
       pushLog('AI', faqHit);
       setPhase('processing');
       const audioUrl = await VoiceService.speakFaq(faqHit, SESSION_ID + '_faq');
-      if (audioUrl && vad.activeRef.current) player.play(audioUrl);
-      else if (vad.activeRef.current)        setPhase('waiting');
+      if (audioUrl && vad.activeRef.current) {
+        player.play(audioUrl);
+        if (speakerMutedRef.current) setTimeout(() => { if (player.audioRef.current) player.audioRef.current.volume = 0; }, 0);
+      } else if (vad.activeRef.current) setPhase('waiting');
       return;
     }
     vad.clearTimers();
@@ -119,36 +121,34 @@ const InTimeTecConsole: React.FC = () => {
       if (res.download_url) pushLog('SYSTEM', 'Report ready.');
       if (res.pptx_url)     pushLog('SYSTEM', 'Presentation ready.');
       player.play(res.voice_response_url);
-    } else {
-        vad.setPhase('waiting');
-        setPhase('waiting');
-      }
+      if (speakerMutedRef.current) setTimeout(() => { if (player.audioRef.current) player.audioRef.current.volume = 0; }, 0);
+    } else { vad.setPhase('waiting'); setPhase('waiting'); }
   }, [vad, player, pushLog]);
 
   return (
     <div style={{
-      minHeight: '100vh', backgroundColor: T.colors.primaryBg,
-      color: T.colors.textMain, fontFamily: '"Inter", system-ui, sans-serif',
-      display: 'flex', flexDirection: 'column', overflowX: 'hidden',
+      minHeight: '100vh',
+      height: connected ? '100vh' : 'auto',
+      backgroundColor: connected ? '#0A0B0F' : T.colors.primaryBg,
+      color: T.colors.textMain,
+      fontFamily: '"Inter", system-ui, sans-serif',
+      display: 'flex', flexDirection: 'column',
+      overflow: connected ? 'hidden' : 'visible',
     }}>
-      <AppHeader />
+      {!connected && <AppHeader />}
       {!connected
         ? <LandingView onConnect={handleConnect} />
         : <ConsoleView
             phase={phase} amplitude={amplitude} logs={logs}
             dlUrl={docUrls.pdf} pptxUrl={docUrls.pptx} sessionId={SESSION_ID}
-            isMuted={isMuted}
+            isMicMuted={isMicMuted} isSpeakerMuted={isSpeakerMuted}
             onDisconnect={handleDisconnect}
-            onOpenDrawer={() => setDrawerOpen(true)}
-            onToggleMute={toggleMute}
+            onToggleMic={toggleMic}
+            onToggleSpeaker={toggleSpeaker}
+            onDispatch={handleDispatch}
           />
       }
-      <AppFooter />
-      <FallbackDrawer
-        open={drawerOpen} logs={logs}
-        onClose={() => setDrawerOpen(false)}
-        onDispatch={handleDispatch}
-      />
+      {!connected && <AppFooter />}
     </div>
   );
 };
