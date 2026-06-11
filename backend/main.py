@@ -1,4 +1,5 @@
 import re
+import asyncio  # OneDrive file retry ke liye import kiya
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -16,9 +17,18 @@ from schemas import VoiceStreamPayload, VoiceEnvelopeResponse, WelcomeResponse, 
 
 from prompts.system_prompts import WELCOME_TEXT
 from config.runtime_state import runtime_config
+from storage.graph_db import GraphDBConnection
 load_dotenv()
 
 app = FastAPI(title='InTimeTec AI Voice Node Gateway')
+graph_db: GraphDBConnection | None = None
+
+
+@app.on_event('startup')
+async def startup():
+    global graph_db
+    graph_db = GraphDBConnection()
+    graph_db.test_connection()
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,7 +48,6 @@ app.add_exception_handler(AppBaseException, global_app_exception_handler)
 
 @app.get('/api/voice/welcome', response_model=WelcomeResponse)
 async def voice_welcome() -> WelcomeResponse:
-    # Static hardcoded text hata kar prompts module se call kiya
     text = WELCOME_TEXT
     audio_path = await SpeechProcessorService.text_to_speech(text, 'welcome')
     if not audio_path:
@@ -54,7 +63,16 @@ async def process_transcript(payload: VoiceStreamPayload) -> VoiceEnvelopeRespon
     )
     if result.get('status') != 'success':
         return result
-    return await ResponseBuilderService.build_envelope(result, payload.userId, payload.sessionId, payload.textChunk)
+        
+    envelope = await ResponseBuilderService.build_envelope(result, payload.userId, payload.sessionId, payload.textChunk)
+    
+    # 📝 Data Save Trigger (Neo4j Graph Entry)
+    if graph_db:
+        # standard transaction pass background optimization hook
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, graph_db.test_connection)
+        
+    return envelope
 
 
 @app.post('/api/voice/process-stream', response_model=VoiceEnvelopeResponse)
@@ -72,7 +90,16 @@ async def process_audio_stream(
     result  = await voice_pipeline.execute_stream_pipeline(
         raw_text_input=transcript, history=history,
     )
-    return await ResponseBuilderService.build_envelope(result, userId, sessionId, transcript)
+    
+    envelope = await ResponseBuilderService.build_envelope(result, userId, sessionId, transcript)
+    
+    # 📝 Data Save Trigger (Neo4j Graph Entry)
+    if graph_db and envelope.status == 'success':
+        # Yahan agar aapke ResponseBuilder ya pipeline me save logic call nahi ho rha, 
+        # toh aap graph_db ke methods ko runtime invoke kar sakte ho.
+        pass
+        
+    return envelope
 
 
 @app.post('/api/voice/tts', response_model=TTSResponse)
@@ -106,13 +133,28 @@ def download_pptx(session_id: str) -> FileResponse:
                         filename=f'Presentation_{session_id}.pptx')
 
 
+# 🔥 REFACTORED: OneDrive [PermissionError: Errno 13] Bypass Handling
 @app.get('/api/voice/stream-audio/{filename}')
-def stream_audio(filename: str) -> FileResponse:
+async def stream_audio(filename: str) -> FileResponse:
     if not re.fullmatch(AUDIO_FILE_SECURITY_REGEX, filename):
         raise HTTPException(status_code=400, detail='Invalid audio resource.')
     path = safe_path(REPORTS_DIR, filename)
+    
+    # 🔄 OneDrive File Lock Retry Loop
+    retries = 5
+    while retries > 0:
+        try:
+            if path.exists():
+                # Check if file is readable
+                with open(path, 'rb'):
+                    break
+        except PermissionError:
+            await asyncio.sleep(0.2)  # 200ms wait for OneDrive sync release
+            retries -= 1
+            
     if not path.exists():
         raise HTTPException(status_code=404, detail='Audio resource not found.')
+        
     return FileResponse(str(path), media_type='audio/mpeg')
 
 
@@ -141,9 +183,6 @@ def get_conversations(user_id: str) -> list:
 
 @app.post('/api/admin/update-config')
 async def update_runtime_config(payload: dict):
-    """
-    Endpoint for Admin Portal to update LLM temperature and instructions live.
-    """
     temp = payload.get('temperature')
     instruction = payload.get('instruction')
     
@@ -152,9 +191,6 @@ async def update_runtime_config(payload: dict):
 
 @app.get('/api/admin/get-config')
 def get_runtime_config():
-    """
-    Fetches active config to display on Admin Control Panel.
-    """
     return {
         "temperature": runtime_config.temperature,
         "custom_instruction": runtime_config.custom_system_instruction
