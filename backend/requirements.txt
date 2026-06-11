@@ -8,3 +8,4 @@ python-pptx>=1.0.2
 python-multipart>=0.0.9
 livekit-api>=0.7.0
 edge-tts>=7.0.0
+neo4j
