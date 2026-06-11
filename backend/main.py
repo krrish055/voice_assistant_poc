@@ -62,16 +62,20 @@ async def process_transcript(payload: VoiceStreamPayload) -> VoiceEnvelopeRespon
         raw_text_input=payload.textChunk, history=history,
     )
     if result.get('status') != 'success':
-        return result
-        
+        return VoiceEnvelopeResponse(
+            status=result.get('status', 'error'),
+            user_said=payload.textChunk,
+            ai_response_text=result.get('ai_response_text', ''),
+        )
+
     envelope = await ResponseBuilderService.build_envelope(result, payload.userId, payload.sessionId, payload.textChunk)
-    
-    # 📝 Data Save Trigger (Neo4j Graph Entry)
-    if graph_db:
-        # standard transaction pass background optimization hook
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, graph_db.test_connection)
-        
+
+    if graph_db and envelope.status == 'success':
+        asyncio.get_event_loop().run_in_executor(
+            None, graph_db.save_turn,
+            payload.userId, payload.sessionId, envelope.user_said, envelope.ai_response_text
+        )
+
     return envelope
 
 
@@ -92,13 +96,13 @@ async def process_audio_stream(
     )
     
     envelope = await ResponseBuilderService.build_envelope(result, userId, sessionId, transcript)
-    
-    # 📝 Data Save Trigger (Neo4j Graph Entry)
+
     if graph_db and envelope.status == 'success':
-        # Yahan agar aapke ResponseBuilder ya pipeline me save logic call nahi ho rha, 
-        # toh aap graph_db ke methods ko runtime invoke kar sakte ho.
-        pass
-        
+        asyncio.get_event_loop().run_in_executor(
+            None, graph_db.save_turn,
+            userId, sessionId, envelope.user_said, envelope.ai_response_text
+        )
+
     return envelope
 
 
