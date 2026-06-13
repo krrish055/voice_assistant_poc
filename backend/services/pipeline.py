@@ -1,5 +1,4 @@
 import json
-
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
@@ -37,8 +36,14 @@ class VoicePipelineOrchestrator(BasePipeline):
     def _build_messages(history: list, raw_text_input: str) -> list:
         messages = [{'role': 'system', 'content': SYSTEM_PROMPT}]
         for turn in history:
-            messages.append({'role': 'user',      'content': turn['user_input']})
-            messages.append({'role': 'assistant', 'content': turn['ai_response_text']})
+            messages.append({'role': 'user', 'content': turn['user_input']})
+            ai_context = turn.get('ai_response_text', '')
+            if turn.get('ai_data'):
+                try:
+                    ai_context = json.dumps(turn['ai_data'])
+                except Exception:
+                    pass
+            messages.append({'role': 'assistant', 'content': ai_context})
         messages.append({'role': 'user', 'content': raw_text_input})
         return messages
 
