@@ -27,7 +27,7 @@ class ResponseBuilderService:
             status = 'CHAT' if intent == 'CHAT' else ('APPROVED' if ai_data.get('data_complete') else 'GATHERING')
             save_turn({'user_id': user_id, 'session_id': session_id, 'user_input': transcript,
                        'ai_response_text': ai_response_text, 'intent': intent,
-                       'ai_data': ai_data if status == 'APPROVED' else {}, 'status': status})
+                       'ai_data': ai_data, 'status': status})
             if status == 'APPROVED':
                 t = transcript.lower()
                 pptx_kw = ('ppt', 'pptx', 'powerpoint', 'presentation', 'slides')

@@ -37,15 +37,13 @@ class GeneratorService:
             s2.shapes.title.text = 'EXECUTIVE SUMMARY'
             s2.placeholders[1].text = _sanitize(ai_data.get('ai_summary', 'No summary provided.'))
 
-            # Slide 3: Requirements Matrix
-            s3 = prs.slides.add_slide(prs.slide_layouts[1])
-            s3.shapes.title.text = 'REQUIREMENTS MATRIX'
-            tf = s3.placeholders[1].text_frame
-            tf.text = 'Extracted Specifications:'
-            for row in ai_data.get('structured_data', [])[:MAX_MATRIX_DISPLAY_ROWS]:
-                p = tf.add_paragraph()
-                p.text = f"• {_sanitize(row.get('item', 'Parameter'))}: {_sanitize(row.get('value', '—'))}"
-                p.level = 1
+            # One slide per section from AI
+            for section in ai_data.get('sections', []):
+                slide = prs.slides.add_slide(prs.slide_layouts[1])
+                slide.shapes.title.text = _sanitize(section.get('heading', 'Section'))
+                tf = slide.placeholders[1].text_frame
+                tf.word_wrap = True
+                tf.text = _sanitize(section.get('body', ''))
 
             prs.save(str(target))
             return target
@@ -61,8 +59,10 @@ class GeneratorService:
             target = safe_path(REPORTS_DIR, f'Report_{session_id}.pdf')
 
             pdf = FPDF()
+            pdf.set_auto_page_break(auto=True, margin=15)
             pdf.add_page()
 
+            # Title
             pdf.set_font('Arial', size=18, style='B')
             pdf.set_text_color(44, 62, 80)
             pdf.cell(0, 15, txt=_sanitize(ai_data.get('report_title', DEFAULT_REPORT_TITLE)).upper(), ln=True, align='C')
@@ -73,6 +73,7 @@ class GeneratorService:
             pdf.cell(0, 5, txt=f'Report ID: EXP-{session_id.upper()}', ln=True, align='R')
             pdf.ln(8)
 
+            # Metadata table
             pdf.set_fill_color(52, 73, 94)
             pdf.set_text_color(255, 255, 255)
             pdf.set_font('Arial', size=11, style='B')
@@ -87,14 +88,25 @@ class GeneratorService:
                 pdf.cell(90,  10, txt=_sanitize(row.get('value', 'N/A')), border=1, align='C')
                 pdf.ln()
 
+            # Executive summary
             pdf.ln(8)
             pdf.set_font('Arial', size=12, style='B')
             pdf.set_text_color(44, 62, 80)
-            pdf.cell(0, 10, txt='AI Summary & Analytical Insights:', ln=True)
-
+            pdf.cell(0, 10, txt='Executive Summary:', ln=True)
             pdf.set_font('Arial', size=11, style='I')
             pdf.set_text_color(52, 73, 94)
             pdf.multi_cell(0, 7, txt=_sanitize(ai_data.get('ai_summary', 'No details provided.')))
+
+            # One section per page
+            for section in ai_data.get('sections', []):
+                pdf.add_page()
+                pdf.set_font('Arial', size=14, style='B')
+                pdf.set_text_color(44, 62, 80)
+                pdf.cell(0, 12, txt=_sanitize(section.get('heading', '')), ln=True)
+                pdf.ln(3)
+                pdf.set_font('Arial', size=11)
+                pdf.set_text_color(52, 73, 94)
+                pdf.multi_cell(0, 7, txt=_sanitize(section.get('body', '')))
 
             pdf.output(str(target))
             return str(target)
