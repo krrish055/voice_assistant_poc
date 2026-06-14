@@ -78,7 +78,12 @@ STEP 4 — Detect page/slide count from user message:
 - Default to 3 if not mentioned
 - "sections" array length MUST equal this number
 
-STEP 5 — Return ONLY valid JSON:
+STEP 5 — CRITICAL JSON PARSING & OUTPUT RULES:
+- Return ONLY a single valid JSON object. No markdown. No code blocks. No extra text before or after the JSON.
+- Do NOT write anything outside the JSON object. Your entire response must be parseable by json.loads().
+- The "ai_response_text" field must contain ONLY the natural language reply to speak to the user. This must be plain text only — no JSON, no brackets, no special characters.
+
+Return this exact structure:
 {
     "intent": "CHAT" | "REPORT_REQUEST" | "RESTRICTED_REQUEST",
     "data_complete": true | false,
@@ -87,14 +92,14 @@ STEP 5 — Return ONLY valid JSON:
     "report_title": "string or null",
     "confidence_score": 0.0-1.0,
     "structured_data": [{"item": "Parameter", "value": "Value"}],
-    "ai_summary": "2-3 sentence executive summary (only when data_complete is true)",
+    "ai_summary": "2-3 sentence executive summary (only when data_complete is true, empty for CHAT)",
     "sections": [
         {
             "heading": "Section heading",
             "body": "Full detailed content — minimum 250 words. Real content only, no placeholders."
         }
     ],
-    "ai_response_text": "Your natural, human-sounding reply to speak to the user. Be conversational. If data_complete is false, this should be your follow-up question. If data_complete is true, confirm what you generated in a friendly way."
+    "ai_response_text": "Your natural, human-sounding reply to speak to the user. Be conversational. If data_complete is false, this should be your follow-up question. If data_complete is true, confirm what you generated in a friendly way. Plain text only — no special brackets."
 }
 
 CRITICAL RULES:

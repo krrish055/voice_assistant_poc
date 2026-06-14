@@ -12,7 +12,9 @@ import { ConsoleView } from './ConsoleView';
 import { AppFooter }   from './AppFooter';
 import type { Phase, AppLog } from '../types';
 
-const InTimeTecConsole: React.FC = () => {
+export interface InTimeTecConsoleProps { onAdminClick?: () => void }
+
+const InTimeTecConsole: React.FC<InTimeTecConsoleProps> = ({ onAdminClick }) => {
   const [connected,      setConnected]      = useState(false);
   const [phase,          setPhase]          = useState<Phase>('idle');
   const [logs,           setLogs]           = useState<AppLog[]>([]);
@@ -23,6 +25,8 @@ const InTimeTecConsole: React.FC = () => {
   const [faqMap,         setFaqMap]         = useState<Record<string, string>>({});
   const speakerMutedRef = useRef(false);
   const userId = 'user_open_mic';
+
+  const processingRef = useRef(false);  // prevents duplicate concurrent pipeline calls
 
   const pushLog = useCallback((source: AppLog['source'], message: string) => {
     setLogs(prev => [{ id: mkId(), source, message, ts: new Date().toLocaleTimeString() }, ...prev.slice(0, 79)]);
@@ -38,21 +42,28 @@ const InTimeTecConsole: React.FC = () => {
     onAmplitude: setAmplitude,
     onLog      : msg => pushLog('SYSTEM', msg),
     onBlob     : async (blob) => {
+      // Block if already processing or audio is playing
+      if (processingRef.current || player.audioRef.current) return;
+      processingRef.current = true;
       setPhase('processing');
       pushLog('SYSTEM', `Dispatching ${(blob.size / 1024).toFixed(1)} KB to pipeline…`);
-      const res = await VoiceService.sendChunk(blob, userId, SESSION_ID);
-      if (!vad.activeRef.current) return;
-      if (res.status === 'success' && res.voice_response_url) {
-        if (res.user_said)        pushLog('USER', res.user_said);
-        if (res.ai_response_text) pushLog('AI',   res.ai_response_text);
-        setDocUrls({ pdf: res.download_url ?? null, pptx: res.pptx_url ?? null });
-        if (res.download_url) pushLog('SYSTEM', 'Compliance report generated.');
-        if (res.pptx_url)     pushLog('SYSTEM', 'Presentation generated.');
-        player.play(res.voice_response_url);
-        if (speakerMutedRef.current) setTimeout(() => { if (player.audioRef.current) player.audioRef.current.volume = 0; }, 0);
-      } else {
-        vad.setPhase('waiting'); setPhase('waiting');
-        pushLog('SYSTEM', 'Silent sample received. Re-arming VAD.');
+      try {
+        const res = await VoiceService.sendChunk(blob, userId, SESSION_ID);
+        if (!vad.activeRef.current) return;
+        if (res.status === 'success' && res.voice_response_url) {
+          if (res.user_said)        pushLog('USER', res.user_said);
+          if (res.ai_response_text) pushLog('AI',   res.ai_response_text);
+          setDocUrls({ pdf: res.download_url ?? null, pptx: res.pptx_url ?? null });
+          if (res.download_url) pushLog('SYSTEM', 'Compliance report generated.');
+          if (res.pptx_url)     pushLog('SYSTEM', 'Presentation generated.');
+          player.play(res.voice_response_url);
+          if (speakerMutedRef.current) setTimeout(() => { if (player.audioRef.current) player.audioRef.current.volume = 0; }, 0);
+        } else {
+          vad.setPhase('waiting'); setPhase('waiting');
+          pushLog('SYSTEM', 'Silent sample received. Re-arming VAD.');
+        }
+      } finally {
+        processingRef.current = false;
       }
     },
   });
@@ -96,6 +107,7 @@ const InTimeTecConsole: React.FC = () => {
 
   const handleDisconnect = useCallback(() => {
     vad.teardown(); player.stop();
+    processingRef.current = false;
     setConnected(false); setIsMicMuted(false); setIsSpeakerMuted(false);
     speakerMutedRef.current = false;
   }, [vad, player]);
@@ -138,7 +150,7 @@ const InTimeTecConsole: React.FC = () => {
       display: 'flex', flexDirection: 'column',
       overflow: connected ? 'hidden' : 'visible',
     }}>
-      {!connected && <AppHeader />}
+      {!connected && <AppHeader onAdminClick={onAdminClick} />}
       {!connected
         ? <LandingView onConnect={handleConnect} />
         : <ConsoleView
