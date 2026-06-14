@@ -10,7 +10,8 @@ from fastapi.responses import FileResponse
 from exceptions import AppBaseException
 from handlers import global_app_exception_handler
 from services import voice_pipeline, SpeechProcessorService, ResponseBuilderService
-from storage import get_conversations_by_user, get_session_history
+from storage import get_conversations_by_user
+from storage.history_db import save_turn as save_turn_json
 from utils import validate_session, safe_path, cleanup_old_audio, REPORTS_DIR
 from config import AUDIO_FILE_SECURITY_REGEX, get_allowed_origins
 from schemas import VoiceStreamPayload, VoiceEnvelopeResponse, WelcomeResponse, TTSResponse, TokenResponse
@@ -18,11 +19,14 @@ from schemas import VoiceStreamPayload, VoiceEnvelopeResponse, WelcomeResponse, 
 from prompts.system_prompts import WELCOME_TEXT
 from config.runtime_state import runtime_config
 from storage.graph_db import GraphDBConnection
+
+# ═══ ADMIN MODULE INTEGRATION ═══
+from admin.api import router as admin_router
+
 load_dotenv()
 
 app = FastAPI(title='InTimeTec AI Voice Node Gateway')
 graph_db: GraphDBConnection | None = None
-
 
 @app.on_event('startup')
 async def startup():
@@ -30,16 +34,17 @@ async def startup():
     graph_db = GraphDBConnection()
     graph_db.test_connection()
 
+# ═══ CORS — must be registered BEFORE routers ═══
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_origins(),
     allow_credentials=False,
-    allow_methods=['GET', 'POST'],
+    allow_methods=['GET', 'POST', 'PATCH', 'DELETE', 'PUT', 'OPTIONS'],
     allow_headers=['*'],
 )
 
-
-# ── Exception Handler ─────────────────────────────────────────────────────────
+# ═══ REGISTER ADMIN ROUTER ═══
+app.include_router(admin_router)
 
 app.add_exception_handler(AppBaseException, global_app_exception_handler)
 
@@ -57,7 +62,7 @@ async def voice_welcome() -> WelcomeResponse:
 
 @app.post('/api/voice/process-transcript', response_model=VoiceEnvelopeResponse)
 async def process_transcript(payload: VoiceStreamPayload) -> VoiceEnvelopeResponse:
-    history = get_session_history(payload.sessionId)
+    history = graph_db.get_session_history(payload.sessionId) if graph_db else []
     result = await voice_pipeline.execute_stream_pipeline(
         raw_text_input=payload.textChunk, history=history,
     )
@@ -71,10 +76,9 @@ async def process_transcript(payload: VoiceStreamPayload) -> VoiceEnvelopeRespon
     envelope = await ResponseBuilderService.build_envelope(result, payload.userId, payload.sessionId, payload.textChunk)
 
     if graph_db and envelope.status == 'success':
-        asyncio.get_event_loop().run_in_executor(
-            None, graph_db.save_turn,
-            payload.userId, payload.sessionId, envelope.user_said, envelope.ai_response_text
-        )
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, graph_db.save_turn,
+            payload.userId, payload.sessionId, envelope.user_said, envelope.ai_response_text)
 
     return envelope
 
@@ -90,18 +94,17 @@ async def process_audio_stream(
     transcript = await SpeechProcessorService.extract_clean_text(audio_blob, text_fallback, sessionId)
     if not transcript:
         return VoiceEnvelopeResponse(status='silence', user_said='', ai_response_text='', voice_response_url=None, download_url=None)
-    history = get_session_history(sessionId)
+    history = graph_db.get_session_history(sessionId) if graph_db else []
     result  = await voice_pipeline.execute_stream_pipeline(
         raw_text_input=transcript, history=history,
     )
-    
+
     envelope = await ResponseBuilderService.build_envelope(result, userId, sessionId, transcript)
 
     if graph_db and envelope.status == 'success':
-        asyncio.get_event_loop().run_in_executor(
-            None, graph_db.save_turn,
-            userId, sessionId, envelope.user_said, envelope.ai_response_text
-        )
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, graph_db.save_turn,
+            userId, sessionId, envelope.user_said, envelope.ai_response_text)
 
     return envelope
 
@@ -184,18 +187,3 @@ def get_livekit_token(roomName: str, identity: str) -> TokenResponse:
 @app.get('/api/conversations/{user_id}')
 def get_conversations(user_id: str) -> list:
     return get_conversations_by_user(user_id)
-
-@app.post('/api/admin/update-config')
-async def update_runtime_config(payload: dict):
-    temp = payload.get('temperature')
-    instruction = payload.get('instruction')
-    
-    runtime_config.update_config(temperature=temp, custom_instruction=instruction)
-    return {"status": "success", "message": "Runtime configuration hot-swapped successfully."}
-
-@app.get('/api/admin/get-config')
-def get_runtime_config():
-    return {
-        "temperature": runtime_config.temperature,
-        "custom_instruction": runtime_config.custom_system_instruction
-    }

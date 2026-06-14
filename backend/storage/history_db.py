@@ -39,7 +39,9 @@ def save_turn(entry: dict) -> None:
 
 
 def get_session_history(session_id: str) -> list:
-    return [r for r in _read() if r.get('session_id') == session_id]
+    # Only last 10 turns to avoid context pollution from old sessions
+    records = [r for r in _read() if r.get('session_id') == session_id]
+    return records[-10:]
 
 
 def get_conversations_by_user(user_id: str) -> list:

@@ -17,6 +17,7 @@ backend/reports/*.mp3
 backend/reports/*.pptx
 backend/reports/*.pdf
 backend/db.json
+backend/admin_agents.json
 
 # Environment Secrets
 .env

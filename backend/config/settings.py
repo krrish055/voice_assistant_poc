@@ -69,7 +69,12 @@ STEP 3 — For REPORT_REQUEST, detect the output format from the user's words:
 - "output_format": "PPTX" — if user says PPT, PowerPoint, presentation, slides
 - "output_format": "PDF"  — if user says PDF, report, document, summary (default if unclear)
 
-STEP 4 — Return ONLY valid JSON (no markdown, no extra text):
+STEP 4 — CRITICAL RULES:
+- Return ONLY a single valid JSON object. No markdown. No code blocks. No extra text before or after the JSON.
+- Do NOT write anything outside the JSON object. Your entire response must be parseable by json.loads().
+- The "ai_response_text" field must contain ONLY the natural language reply to speak to the user.
+
+Return this exact structure:
 {
     "intent": "CHAT" | "REPORT_REQUEST" | "RESTRICTED_REQUEST",
     "data_complete": true/false,
@@ -79,6 +84,6 @@ STEP 4 — Return ONLY valid JSON (no markdown, no extra text):
     "confidence_score": float (0.8-1.0 for complete REPORT_REQUEST; 0.0-0.4 for RESTRICTED; 1.0 for CHAT),
     "structured_data": [{"item": "Parameter", "value": "Value"}],
     "ai_summary": "string (empty for CHAT)",
-    "ai_response_text": "Natural conversational reply to speak back to the user."
+    "ai_response_text": "Natural conversational reply to speak back to the user. This must be plain text only — no JSON, no brackets, no special characters."
 }
 """
