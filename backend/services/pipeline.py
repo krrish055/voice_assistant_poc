@@ -1,6 +1,5 @@
 import json
 from datetime import datetime
-
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
@@ -38,13 +37,13 @@ class VoicePipelineOrchestrator(BasePipeline):
     @staticmethod
     def _extract_clean_text(raw: str) -> str:
         """Extract only the natural language part — strip any appended JSON block."""
-        # Try parsing the whole thing as JSON first
         try:
             parsed = json.loads(raw)
             if isinstance(parsed, dict):
                 return parsed.get('ai_response_text') or raw
         except (json.JSONDecodeError, ValueError):
             pass
+        
         # Strip trailing JSON block appended after natural text (e.g. "text...\n\n{...}")
         brace_pos = raw.rfind('\n{')
         if brace_pos != -1:
@@ -57,13 +56,23 @@ class VoicePipelineOrchestrator(BasePipeline):
                 pass
         return raw.strip()
 
-    def _build_messages(self, history: list, raw_text_input: str) -> list:
-        messages = [{'role': 'system', 'content': SYSTEM_PROMPT}]
+    def _build_messages(self, history: list, raw_text_input: str, system_prompt: str = SYSTEM_PROMPT) -> list:
+        messages = [{'role': 'system', 'content': system_prompt}]
         for turn in history:
             messages.append({'role': 'user', 'content': turn['user_input']})
-            # Sanitize saved ai_response_text — strip any appended JSON from old turns
-            clean = self._extract_clean_text(turn.get('ai_response_text', ''))
-            messages.append({'role': 'assistant', 'content': clean})
+            
+            # Combine both branches: Check if rich data context exists, else clean up plain text
+            ai_context = turn.get('ai_response_text', '')
+            if turn.get('ai_data'):
+                try:
+                    ai_context = json.dumps(turn['ai_data'])
+                except Exception:
+                    ai_context = self._extract_clean_text(ai_context)
+            else:
+                ai_context = self._extract_clean_text(ai_context)
+                
+            messages.append({'role': 'assistant', 'content': ai_context})
+            
         messages.append({'role': 'user', 'content': raw_text_input})
         return messages
 
@@ -83,7 +92,7 @@ class VoicePipelineOrchestrator(BasePipeline):
         source = "Hardcoded Config"
         
         try:
-            # Try to get active agent from orchestrator
+            # Try to get active agent from orchestrator safely
             if hasattr(orchestrator, '_agents') and orchestrator._agents:
                 for agent_id, agent in orchestrator._agents.items():
                     if hasattr(agent, 'is_active') and agent.is_active and hasattr(agent, 'config'):
@@ -98,13 +107,8 @@ class VoicePipelineOrchestrator(BasePipeline):
             print(f"⚠️  Failed to load agent config, using fallback: {e}")
 
         try:
-            # Build messages with dynamic system prompt
-            messages = [{'role': 'system', 'content': system_prompt}]
-            for turn in history:
-                messages.append({'role': 'user', 'content': turn['user_input']})
-                clean = self._extract_clean_text(turn.get('ai_response_text', ''))
-                messages.append({'role': 'assistant', 'content': clean})
-            messages.append({'role': 'user', 'content': raw_text_input})
+            # Build messages using the updated, safe multi-branch logic
+            messages = self._build_messages(history, raw_text_input, system_prompt)
             
             response = await self._get_client().chat.completions.create(
                 model=model,
