@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fpdf import FPDF
 
-from config import PPTX_EMU_WIDTH, PPTX_EMU_HEIGHT, MAX_MATRIX_DISPLAY_ROWS, DEFAULT_REPORT_TITLE
+from config import PPTX_EMU_WIDTH, PPTX_EMU_HEIGHT, DEFAULT_REPORT_TITLE
 from exceptions import DocumentGenerationError
 from utils import safe_path, REPORTS_DIR
 

@@ -77,16 +77,16 @@ export const AgentCard: React.FC<Props> = ({ agent, onUpdate, onSelect, selected
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{
             width: 8, height: 8, borderRadius: '50%',
-            background: STATUS_COLOR[agent.status] ?? '#94A3B8',
-            boxShadow: `0 0 8px ${STATUS_COLOR[agent.status] ?? '#94A3B8'}`,
+            background: STATUS_COLOR[agent.status ?? ''] ?? '#94A3B8',
+            boxShadow: `0 0 8px ${STATUS_COLOR[agent.status ?? ''] ?? '#94A3B8'}`,
           }} />
           <span style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 15 }}>{agent.name}</span>
           <span style={{ fontSize: 11, color: '#94A3B8', background: 'rgba(148,163,184,0.1)', padding: '2px 8px', borderRadius: 20 }}>
-            {agent.status.toUpperCase()}
+            {agent.status?.toUpperCase() ?? 'UNKNOWN'}
           </span>
         </div>
         <div style={{ display: 'flex', gap: 6 }} onClick={e => e.stopPropagation()}>
-          {agent.status !== 'paused'
+          {agent.status !== 'paused' && agent.status !== undefined
             ? <IconBtn title="Pause"   onClick={e => handleAction(e, 'pause')}   icon={<Pause size={13} />} />
             : <IconBtn title="Resume"  onClick={e => handleAction(e, 'resume')}  icon={<Play  size={13} />} />
           }

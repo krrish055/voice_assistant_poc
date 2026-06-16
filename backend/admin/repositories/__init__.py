@@ -1,10 +1,9 @@
-"""Repository Layer"""
-from .repository import (
+from admin.repositories.repository import (
     IAgentRepository, IChatRepository, IPromptRepository,
-    AgentRepositoryImpl, ChatRepositoryImpl, PromptRepositoryImpl
+    AgentRepositoryImpl, ChatRepositoryImpl, PromptRepositoryImpl,
 )
 
 __all__ = [
     "IAgentRepository", "IChatRepository", "IPromptRepository",
-    "AgentRepositoryImpl", "ChatRepositoryImpl", "PromptRepositoryImpl"
+    "AgentRepositoryImpl", "ChatRepositoryImpl", "PromptRepositoryImpl",
 ]

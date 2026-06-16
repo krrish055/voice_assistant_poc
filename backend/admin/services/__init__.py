@@ -1,5 +1,3 @@
-"""Service Layer"""
-from .core_service import AgentService, ChatService, PromptService
-from .orchestrator import orchestrator
+from admin.services.core_service import AgentService, ChatService, PromptService
 
-__all__ = ["AgentService", "ChatService", "PromptService", "orchestrator"]
+__all__ = ["AgentService", "ChatService", "PromptService"]

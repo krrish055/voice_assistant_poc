@@ -1,4 +1,4 @@
-"""Domain Layer"""
-from .models import Agent, AgentConfig, ChatMessage, PromptTemplate
+from agents.base_agent import AgentConfig
+from admin.domain.models import ChatMessage, PromptTemplate
 
-__all__ = ["Agent", "AgentConfig", "ChatMessage", "PromptTemplate"]
+__all__ = ["AgentConfig", "ChatMessage", "PromptTemplate"]

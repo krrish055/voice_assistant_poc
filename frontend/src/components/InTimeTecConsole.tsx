@@ -14,6 +14,17 @@ import type { Phase, AppLog } from '../types';
 
 export interface InTimeTecConsoleProps { onAdminClick?: () => void }
 
+// Module-level utility — no closure issues, stable reference
+function extractAiText(raw: string | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed.ai_response_text || parsed.ai_summary || parsed.sections?.[0]?.body || raw;
+  } catch {
+    return raw;
+  }
+}
+
 const InTimeTecConsole: React.FC<InTimeTecConsoleProps> = ({ onAdminClick }) => {
   const [connected,      setConnected]      = useState(false);
   const [phase,          setPhase]          = useState<Phase>('idle');
@@ -51,8 +62,9 @@ const InTimeTecConsole: React.FC<InTimeTecConsoleProps> = ({ onAdminClick }) => 
         const res = await VoiceService.sendChunk(blob, userId, SESSION_ID);
         if (!vad.activeRef.current) return;
         if (res.status === 'success' && res.voice_response_url) {
-          if (res.user_said)        pushLog('USER', res.user_said);
-          if (res.ai_response_text) pushLog('AI',   res.ai_response_text);
+          if (res.user_said) pushLog('USER', res.user_said);
+          const aiText = extractAiText(res.ai_response_text);
+          if (aiText) pushLog('AI', aiText);
           setDocUrls({ pdf: res.download_url ?? null, pptx: res.pptx_url ?? null });
           if (res.download_url) pushLog('SYSTEM', 'Compliance report generated.');
           if (res.pptx_url)     pushLog('SYSTEM', 'Presentation generated.');
@@ -131,7 +143,8 @@ const InTimeTecConsole: React.FC<InTimeTecConsoleProps> = ({ onAdminClick }) => 
     const res = await VoiceService.sendText(text, userId, SESSION_ID);
     if (!vad.activeRef.current) return;
     if (res.status === 'success' && res.voice_response_url) {
-      if (res.ai_response_text) pushLog('AI', res.ai_response_text);
+      const aiText = extractAiText(res.ai_response_text);
+      if (aiText) pushLog('AI', aiText);
       setDocUrls({ pdf: res.download_url ?? null, pptx: res.pptx_url ?? null });
       if (res.download_url) pushLog('SYSTEM', 'Report ready.');
       if (res.pptx_url)     pushLog('SYSTEM', 'Presentation ready.');
@@ -161,6 +174,7 @@ const InTimeTecConsole: React.FC<InTimeTecConsoleProps> = ({ onAdminClick }) => 
             onToggleMic={toggleMic}
             onToggleSpeaker={toggleSpeaker}
             onDispatch={handleDispatch}
+            audioElement={player.audioRef.current}
           />
       }
       {!connected && <AppFooter />}

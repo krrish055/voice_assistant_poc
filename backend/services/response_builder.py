@@ -1,49 +1,67 @@
 from pathlib import Path
+import json
 
 from services.generator import GeneratorService
 from services.speech_processor import SpeechProcessorService
-from storage import save_turn
 from schemas import VoiceEnvelopeResponse
+
+
+def _clean_text(value: str) -> str:
+    """Strip any trailing JSON blob that the LLM appended after the spoken text."""
+    if not value:
+        return value
+    brace_idx = value.find('{')
+    if brace_idx > 0:
+        prefix = value[:brace_idx].strip()
+        suffix = value[brace_idx:].strip()
+        try:
+            parsed = json.loads(suffix)
+            # If the JSON itself has a cleaner ai_response_text, prefer it
+            inner = parsed.get("ai_response_text", "").strip()
+            return inner if inner and not inner.startswith("{") else prefix
+        except (json.JSONDecodeError, ValueError):
+            pass
+        return prefix
+    # If the whole thing is JSON, extract the text field
+    if value.strip().startswith("{"):
+        try:
+            parsed = json.loads(value.strip())
+            return (
+                parsed.get("ai_response_text")
+                or parsed.get("ai_summary")
+                or ""
+            ).strip()
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return value
 
 
 class ResponseBuilderService:
 
     @staticmethod
     async def build_envelope(result: dict, user_id: str, session_id: str, transcript: str) -> VoiceEnvelopeResponse:
-        """Classify intent, persist turn, optionally generate PDF, return response envelope."""
-        ai_data          = result.get('data', {})
-        intent           = ai_data.get('intent', 'CHAT')
-        ai_response_text = ai_data.get('ai_response_text', 'How can I help you?')
-        is_restricted    = intent == 'RESTRICTED_REQUEST' or ai_data.get('is_restricted_query', False)
+        ai_data = result.get("data", {})
+        intent = ai_data.get("intent", "CHAT")
+        raw_text = result.get("ai_response_text") or ai_data.get("ai_response_text", "How can I help you?")
+        ai_response_text = _clean_text(raw_text) or "How can I help you?"
+        is_restricted = intent == "RESTRICTED_REQUEST" or ai_data.get("is_restricted_query", False)
 
-        download_url = None
-        pptx_url     = None
+        download_url = pptx_url = None
 
-        if is_restricted:
-            save_turn({'user_id': user_id, 'session_id': session_id, 'user_input': transcript,
-                       'ai_response_text': ai_response_text, 'intent': intent,
-                       'ai_data': ai_data, 'status': 'PENDING_ADMIN_APPROVAL'})
-        else:
-            status = 'CHAT' if intent == 'CHAT' else ('APPROVED' if ai_data.get('data_complete') else 'GATHERING')
-            save_turn({'user_id': user_id, 'session_id': session_id, 'user_input': transcript,
-                       'ai_response_text': ai_response_text, 'intent': intent,
-                       'ai_data': ai_data, 'status': status})
-            if status == 'APPROVED':
-                t = transcript.lower()
-                pptx_kw = ('ppt', 'pptx', 'powerpoint', 'presentation', 'slides')
-                want_pptx = any(k in t for k in pptx_kw)
-                if want_pptx:
-                    GeneratorService.generate_dynamic_pptx(ai_data, session_id)
-                    pptx_url = f'/api/voice/download-pptx/{session_id}'
-                else:
-                    GeneratorService.generate_dynamic_pdf(ai_data, session_id)
-                    download_url = f'/api/voice/download-report/{session_id}'
+        if not is_restricted and intent == "REPORT_REQUEST" and ai_data.get("data_complete"):
+            want_pptx = any(k in transcript.lower() for k in ("ppt", "pptx", "powerpoint", "presentation", "slides"))
+            if want_pptx:
+                GeneratorService.generate_dynamic_pptx(ai_data, session_id)
+                pptx_url = f"/api/voice/download-pptx/{session_id}"
+            else:
+                GeneratorService.generate_dynamic_pdf(ai_data, session_id)
+                download_url = f"/api/voice/download-report/{session_id}"
 
         audio_path = await SpeechProcessorService.text_to_speech(ai_response_text, session_id)
-        audio_url  = f'/api/voice/stream-audio/{Path(audio_path).name}' if audio_path else None
+        audio_url = f"/api/voice/stream-audio/{Path(audio_path).name}" if audio_path else None
 
         return VoiceEnvelopeResponse(
-            status='success',
+            status="success",
             user_said=transcript,
             ai_response_text=ai_response_text,
             download_url=download_url,
