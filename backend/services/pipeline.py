@@ -1,24 +1,98 @@
 import json
-from datetime import datetime
+import re
+from typing import Any
+
 from openai import AsyncOpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from base import BasePipeline
-from config import GROQ_BASE_URL, SYSTEM_PROMPT, get_groq_api_key, get_model, LLM_TEMPERATURE, LLM_MAX_TOKENS
+from config import GROQ_BASE_URL, get_groq_api_key, get_model, LLM_TEMPERATURE, LLM_MAX_TOKENS
 from exceptions import LLMProcessingError
-from admin.services.orchestrator import orchestrator
+from registry.agent_registry import registry
+from agents.base_agent import AgentInput
+from prompts.system_prompts import REPORT_SYSTEM_PROMPT
+from prompts.template_engine import render
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _extract_text_from_llm_output(raw: dict) -> str:
+    """Pull the human-readable spoken reply out of a parsed LLM output dict.
+    Never returns a raw JSON string."""
+    text = raw.get("ai_response_text", "")
+    if not isinstance(text, str) or not text.strip():
+        text = raw.get("ai_summary", "")
+    if not isinstance(text, str) or not text.strip():
+        sections = raw.get("sections") or []
+        text = sections[0].get("body", "") if sections else ""
+    return (text or "").strip()
+
+
+def _sanitise_ai_text(value: str) -> str:
+    """If a JSON blob somehow ends up in a text field, extract the spoken part."""
+    stripped = value.strip()
+    if stripped.startswith("{"):
+        try:
+            parsed = json.loads(stripped)
+            clean = _extract_text_from_llm_output(parsed)
+            return clean or "I'm sorry, I couldn't formulate a response. Please try again."
+        except Exception:
+            pass
+    return value
+
+
+def _extract_known_slots(history: list) -> dict[str, Any]:
+    """Scan session history to recover already-confirmed report slots so the
+    system prompt can tell the LLM not to ask for them again."""
+    slots: dict[str, Any] = {}
+    for turn in history:
+        # Slots may be stored in the structured JSON that was saved to Neo4j
+        # before the sanitisation fix was in place.
+        ai_raw = turn.get("ai_response_text", "")
+        if isinstance(ai_raw, str) and ai_raw.strip().startswith("{"):
+            try:
+                parsed = json.loads(ai_raw)
+                for entry in parsed.get("structured_data", []):
+                    item, value = entry.get("item"), entry.get("value")
+                    if item and value and str(value).lower() not in ("unknown", "", "null", "none"):
+                        slots[item] = value
+                if parsed.get("report_title"):
+                    slots["report_title"] = parsed["report_title"]
+            except Exception:
+                pass
+        # Also check raw user turns for explicit topic mentions (belt-and-braces)
+        user_raw = turn.get("user_input", "")
+        if user_raw and not slots.get("Topic"):
+            slots["_user_context"] = user_raw[:200]
+    return slots
+
+
+# ---------------------------------------------------------------------------
+# Response model
+# ---------------------------------------------------------------------------
 
 class PipelineResponse(BaseModel):
-    status           : str
-    ai_response_text : str
-    confidence_score : float
-    data             : dict = {}
+    status: str
+    ai_response_text: str
+    confidence_score: float
+    data: dict = {}
+
+    @field_validator("ai_response_text")
+    @classmethod
+    def must_be_plain_text(cls, v: str) -> str:
+        """Last-resort guard at the model boundary."""
+        return _sanitise_ai_text(v)
 
 
-class VoicePipelineOrchestrator(BasePipeline):
+# ---------------------------------------------------------------------------
+# Pipeline
+# ---------------------------------------------------------------------------
 
-    def __init__(self) -> None:
+class VoicePipeline(BasePipeline):
+
+    def __init__(self):
         self._client: AsyncOpenAI | None = None
 
     def _get_client(self) -> AsyncOpenAI:
@@ -27,122 +101,118 @@ class VoicePipelineOrchestrator(BasePipeline):
         return self._client
 
     @staticmethod
-    def _strip_markdown(raw: str) -> str:
-        if raw.startswith('```'):
-            raw = raw.split('```')[1]
-            if raw.startswith('json'):
-                raw = raw[4:]
-        return raw.strip()
+    def _parse_llm_output(raw: str) -> dict:
+        # Strip markdown code fences
+        raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
+        raw = re.sub(r"\s*```$", "", raw.strip())
 
-    @staticmethod
-    def _extract_clean_text(raw: str) -> str:
-        """Extract only the natural language part — strip any appended JSON block."""
+        # Case 1: pure JSON response
         try:
             parsed = json.loads(raw)
             if isinstance(parsed, dict):
-                return parsed.get('ai_response_text') or raw
+                return parsed
         except (json.JSONDecodeError, ValueError):
             pass
-        
-        # Strip trailing JSON block appended after natural text (e.g. "text...\n\n{...}")
-        brace_pos = raw.rfind('\n{')
-        if brace_pos != -1:
-            tail = raw[brace_pos:].strip()
+
+        # Case 2: LLM prepended plain text before the JSON block
+        # e.g. "Hello Krish, I can help. { "intent": ... }"
+        brace_idx = raw.find('{')
+        if brace_idx > 0:
+            prefix_text = raw[:brace_idx].strip()
+            json_part   = raw[brace_idx:].strip()
             try:
-                parsed = json.loads(tail)
-                if isinstance(parsed, dict) and 'intent' in parsed:
-                    return raw[:brace_pos].strip()
+                parsed = json.loads(json_part)
+                if isinstance(parsed, dict):
+                    # Prefer the ai_response_text inside JSON; if missing, use the prefix
+                    if not parsed.get("ai_response_text"):
+                        parsed["ai_response_text"] = prefix_text
+                    return parsed
             except (json.JSONDecodeError, ValueError):
                 pass
-        return raw.strip()
 
-    def _build_messages(self, history: list, raw_text_input: str, system_prompt: str = SYSTEM_PROMPT) -> list:
-        messages = [{'role': 'system', 'content': system_prompt}]
+        # Case 3: plain text fallback
+        return {"intent": "CHAT", "ai_response_text": raw, "confidence_score": 1.0}
+
+    @staticmethod
+    def _build_messages(system_prompt: str, history: list, user_input: str) -> list:
+        messages = [{"role": "system", "content": system_prompt}]
         for turn in history:
-            messages.append({'role': 'user', 'content': turn['user_input']})
-            
-            # Combine both branches: Check if rich data context exists, else clean up plain text
-            ai_context = turn.get('ai_response_text', '')
-            if turn.get('ai_data'):
-                try:
-                    ai_context = json.dumps(turn['ai_data'])
-                except Exception:
-                    ai_context = self._extract_clean_text(ai_context)
-            else:
-                ai_context = self._extract_clean_text(ai_context)
-                
-            messages.append({'role': 'assistant', 'content': ai_context})
-            
-        messages.append({'role': 'user', 'content': raw_text_input})
+            user_turn = (turn.get("user_input") or "").strip()
+            ai_turn   = (turn.get("ai_response_text") or "").strip()
+            # Skip incomplete turns — they corrupt context
+            if not user_turn or not ai_turn:
+                continue
+            # Never inject a raw JSON blob as an assistant message
+            ai_turn = _sanitise_ai_text(ai_turn)
+            if ai_turn:
+                messages.append({"role": "user",      "content": user_turn})
+                messages.append({"role": "assistant", "content": ai_turn})
+        messages.append({"role": "user", "content": user_input})
         return messages
 
     async def execute_stream_pipeline(self, raw_text_input: str, history: list) -> dict:
         if not raw_text_input.strip():
             return PipelineResponse(
-                status='ignored',
-                ai_response_text='Please say something so I can help you.',
-                confidence_score=0.0,
+                status="ignored", ai_response_text="Please say something.", confidence_score=0.0
             ).model_dump()
 
-        # Safe agent config extraction with fallback
-        model = get_model()
-        temperature = LLM_TEMPERATURE
-        max_tokens = LLM_MAX_TOKENS
-        system_prompt = SYSTEM_PROMPT
-        source = "Hardcoded Config"
-        
-        try:
-            # Try to get active agent from orchestrator safely
-            if hasattr(orchestrator, '_agents') and orchestrator._agents:
-                for agent_id, agent in orchestrator._agents.items():
-                    if hasattr(agent, 'is_active') and agent.is_active and hasattr(agent, 'config'):
-                        if agent.config and all(hasattr(agent.config, attr) for attr in ['model', 'temperature', 'max_tokens']):
-                            model = agent.config.model
-                            temperature = agent.config.temperature
-                            max_tokens = agent.config.max_tokens
-                            system_prompt = agent.config.system_prompt or SYSTEM_PROMPT
-                            source = f"Agent: {agent.name}"
-                            break
-        except Exception as e:
-            print(f"⚠️  Failed to load agent config, using fallback: {e}")
+        agent = registry.get_active()
+
+        if agent:
+            agent_input = AgentInput(
+                user_text=raw_text_input,
+                session_history=history,
+            )
+            system_prompt = agent.build_prompt(agent_input)
+            model = agent.config.model
+            temperature = agent.config.temperature
+            max_tokens = agent.config.max_tokens
+        else:
+            # Inject already-confirmed slots so the LLM won't re-ask for them
+            known_slots = _extract_known_slots(history)
+            slot_hint = ""
+            if known_slots:
+                slot_lines = "\n".join(
+                    f"  - {k}: {v}" for k, v in known_slots.items()
+                    if not k.startswith("_")
+                )
+                user_ctx = known_slots.get("_user_context", "")
+                slot_hint = (
+                    "\n\n[ALREADY COLLECTED FROM THIS SESSION — treat as confirmed, do NOT ask again]\n"
+                    + (slot_lines or "")
+                    + (f"\n\nRecent user context: {user_ctx}" if user_ctx else "")
+                )
+            system_prompt = (
+                render(REPORT_SYSTEM_PROMPT, {"agent_name": "Aria", "company": "InTimeTec"})
+                + slot_hint
+            )
+            model, temperature, max_tokens = get_model(), LLM_TEMPERATURE, LLM_MAX_TOKENS
 
         try:
-            # Build messages using the updated, safe multi-branch logic
-            messages = self._build_messages(history, raw_text_input, system_prompt)
-            
+            messages = self._build_messages(system_prompt, history, raw_text_input)
             response = await self._get_client().chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
+                model=model, messages=messages, temperature=temperature, max_tokens=max_tokens,
             )
         except Exception as e:
-            raise LLMProcessingError(f'Groq API call failed: {e}') from e
+            raise LLMProcessingError(f"LLM call failed: {e}") from e
 
-        raw_content = response.choices[0].message.content.strip()
-        
-        # Safe JSON parsing with multiple fallback layers
-        try:
-            ai_data = json.loads(self._strip_markdown(raw_content))
-            if not isinstance(ai_data, dict):
-                ai_data = {'intent': 'CHAT', 'ai_response_text': raw_content, 'confidence_score': 1.0}
-        except (json.JSONDecodeError, ValueError, TypeError):
-            ai_data = {'intent': 'CHAT', 'ai_response_text': raw_content, 'confidence_score': 1.0}
+        raw_output = self._parse_llm_output(response.choices[0].message.content.strip())
 
-        # Extract clean natural language with safety
-        try:
-            ai_text = self._extract_clean_text(
-                ai_data.get('ai_response_text') or raw_content
-            )
-        except Exception:
-            ai_text = raw_content
+        if agent:
+            agent_output = agent.post_process(raw_output)
+            return PipelineResponse(
+                status="success",
+                ai_response_text=agent_output.text,
+                confidence_score=agent_output.confidence,
+                data=agent_output.data,
+            ).model_dump()
 
         return PipelineResponse(
-            status='success',
-            ai_response_text=ai_text,
-            confidence_score=float(ai_data.get('confidence_score', 1.0)),
-            data=ai_data,
+            status="success",
+            ai_response_text=_extract_text_from_llm_output(raw_output),
+            confidence_score=float(raw_output.get("confidence_score", 1.0)),
+            data=raw_output,
         ).model_dump()
 
 
-voice_pipeline = VoicePipelineOrchestrator()
+voice_pipeline = VoicePipeline()
