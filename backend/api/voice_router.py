@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 
-from services import voice_pipeline, SpeechProcessorService, ResponseBuilderService
+from services import voice_pipeline, orchestrator, SpeechProcessorService, ResponseBuilderService
 from utils import validate_session, safe_path, cleanup_old_audio, REPORTS_DIR
 from config import AUDIO_FILE_SECURITY_REGEX
 from schemas import VoiceStreamPayload, VoiceEnvelopeResponse, WelcomeResponse, TTSResponse, TokenResponse
@@ -27,7 +27,7 @@ async def voice_welcome():
 @router.post("/process-transcript", response_model=VoiceEnvelopeResponse)
 async def process_transcript(payload: VoiceStreamPayload):
     history = graph_repo.get_session_history(payload.sessionId)
-    result = await voice_pipeline.execute_stream_pipeline(raw_text_input=payload.textChunk, history=history)
+    result = await orchestrator.run(user_text=payload.textChunk, history=history)
     if result.get("status") != "success":
         return VoiceEnvelopeResponse(status=result.get("status", "error"),
                                      user_said=payload.textChunk,
@@ -52,7 +52,7 @@ async def process_audio_stream(
     if not transcript:
         return VoiceEnvelopeResponse(status="silence", user_said="", ai_response_text="")
     history = graph_repo.get_session_history(sessionId)
-    result = await voice_pipeline.execute_stream_pipeline(raw_text_input=transcript, history=history)
+    result = await orchestrator.run(user_text=transcript, history=history)
     envelope = await ResponseBuilderService.build_envelope(result, userId, sessionId, transcript)
     if envelope.status == "success":
         loop = asyncio.get_running_loop()

@@ -1,6 +1,5 @@
 import json
 import re
-from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, field_validator
@@ -8,8 +7,6 @@ from pydantic import BaseModel, field_validator
 from base import BasePipeline
 from config import GROQ_BASE_URL, get_groq_api_key, get_model, LLM_TEMPERATURE, LLM_MAX_TOKENS
 from exceptions import LLMProcessingError
-from registry.agent_registry import registry
-from agents.base_agent import AgentInput
 from prompts.system_prompts import REPORT_SYSTEM_PROMPT
 from prompts.template_engine import render
 
@@ -20,7 +17,11 @@ from prompts.template_engine import render
 
 def _extract_text_from_llm_output(raw: dict) -> str:
     """Pull the human-readable spoken reply out of a parsed LLM output dict.
-    Never returns a raw JSON string."""
+    Never returns a raw JSON string.
+
+    NOTE: also defined in orchestrator_agent.py to avoid a circular import.
+    Both copies are intentionally identical — do not diverge them.
+    """
     text = raw.get("ai_response_text", "")
     if not isinstance(text, str) or not text.strip():
         text = raw.get("ai_summary", "")
@@ -41,32 +42,6 @@ def _sanitise_ai_text(value: str) -> str:
         except Exception:
             pass
     return value
-
-
-def _extract_known_slots(history: list) -> dict[str, Any]:
-    """Scan session history to recover already-confirmed report slots so the
-    system prompt can tell the LLM not to ask for them again."""
-    slots: dict[str, Any] = {}
-    for turn in history:
-        # Slots may be stored in the structured JSON that was saved to Neo4j
-        # before the sanitisation fix was in place.
-        ai_raw = turn.get("ai_response_text", "")
-        if isinstance(ai_raw, str) and ai_raw.strip().startswith("{"):
-            try:
-                parsed = json.loads(ai_raw)
-                for entry in parsed.get("structured_data", []):
-                    item, value = entry.get("item"), entry.get("value")
-                    if item and value and str(value).lower() not in ("unknown", "", "null", "none"):
-                        slots[item] = value
-                if parsed.get("report_title"):
-                    slots["report_title"] = parsed["report_title"]
-            except Exception:
-                pass
-        # Also check raw user turns for explicit topic mentions (belt-and-braces)
-        user_raw = turn.get("user_input", "")
-        if user_raw and not slots.get("Topic"):
-            slots["_user_context"] = user_raw[:200]
-    return slots
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +90,6 @@ class VoicePipeline(BasePipeline):
             pass
 
         # Case 2: LLM prepended plain text before the JSON block
-        # e.g. "Hello Krish, I can help. { "intent": ... }"
         brace_idx = raw.find('{')
         if brace_idx > 0:
             prefix_text = raw[:brace_idx].strip()
@@ -123,7 +97,6 @@ class VoicePipeline(BasePipeline):
             try:
                 parsed = json.loads(json_part)
                 if isinstance(parsed, dict):
-                    # Prefer the ai_response_text inside JSON; if missing, use the prefix
                     if not parsed.get("ai_response_text"):
                         parsed["ai_response_text"] = prefix_text
                     return parsed
@@ -139,10 +112,8 @@ class VoicePipeline(BasePipeline):
         for turn in history:
             user_turn = (turn.get("user_input") or "").strip()
             ai_turn   = (turn.get("ai_response_text") or "").strip()
-            # Skip incomplete turns — they corrupt context
             if not user_turn or not ai_turn:
                 continue
-            # Never inject a raw JSON blob as an assistant message
             ai_turn = _sanitise_ai_text(ai_turn)
             if ai_turn:
                 messages.append({"role": "user",      "content": user_turn})
@@ -150,63 +121,41 @@ class VoicePipeline(BasePipeline):
         messages.append({"role": "user", "content": user_input})
         return messages
 
-    async def execute_stream_pipeline(self, raw_text_input: str, history: list) -> dict:
-        if not raw_text_input.strip():
-            return PipelineResponse(
-                status="ignored", ai_response_text="Please say something.", confidence_score=0.0
-            ).model_dump()
-
-        agent = registry.get_active()
-
-        if agent:
-            agent_input = AgentInput(
-                user_text=raw_text_input,
-                session_history=history,
-            )
-            system_prompt = agent.build_prompt(agent_input)
-            model = agent.config.model
-            temperature = agent.config.temperature
-            max_tokens = agent.config.max_tokens
-        else:
-            # Inject already-confirmed slots so the LLM won't re-ask for them
-            known_slots = _extract_known_slots(history)
-            slot_hint = ""
-            if known_slots:
-                slot_lines = "\n".join(
-                    f"  - {k}: {v}" for k, v in known_slots.items()
-                    if not k.startswith("_")
-                )
-                user_ctx = known_slots.get("_user_context", "")
-                slot_hint = (
-                    "\n\n[ALREADY COLLECTED FROM THIS SESSION — treat as confirmed, do NOT ask again]\n"
-                    + (slot_lines or "")
-                    + (f"\n\nRecent user context: {user_ctx}" if user_ctx else "")
-                )
-            system_prompt = (
-                render(REPORT_SYSTEM_PROMPT, {"agent_name": "Aria", "company": "InTimeTec"})
-                + slot_hint
-            )
-            model, temperature, max_tokens = get_model(), LLM_TEMPERATURE, LLM_MAX_TOKENS
-
+    async def execute(self, system_prompt: str, model: str, temperature: float,
+                      max_tokens: int, history: list, user_input: str) -> dict:
+        """Pure LLM executor.
+        Accepts a fully-resolved prompt and parameters from the orchestrator.
+        Returns the raw parsed output dict. No agent awareness whatsoever.
+        """
         try:
-            messages = self._build_messages(system_prompt, history, raw_text_input)
+            messages = self._build_messages(system_prompt, history, user_input)
             response = await self._get_client().chat.completions.create(
                 model=model, messages=messages, temperature=temperature, max_tokens=max_tokens,
             )
         except Exception as e:
             raise LLMProcessingError(f"LLM call failed: {e}") from e
+        return self._parse_llm_output(response.choices[0].message.content.strip())
 
-        raw_output = self._parse_llm_output(response.choices[0].message.content.strip())
-
-        if agent:
-            agent_output = agent.post_process(raw_output)
+    async def execute_stream_pipeline(self, raw_text_input: str, history: list) -> dict:
+        """Backward-compatible, agent-UNAWARE entry point.
+        Retained exclusively for the admin ChatService which manages its own
+        agent selection independently. Do NOT call this from the voice router —
+        use OrchestratorAgent.run() instead.
+        """
+        if not raw_text_input.strip():
             return PipelineResponse(
-                status="success",
-                ai_response_text=agent_output.text,
-                confidence_score=agent_output.confidence,
-                data=agent_output.data,
+                status="ignored", ai_response_text="Please say something.", confidence_score=0.0
             ).model_dump()
 
+        system_prompt = render(REPORT_SYSTEM_PROMPT, {"agent_name": "Aria", "company": "InTimeTec"})
+        raw_output = await self.execute(
+            system_prompt=system_prompt,
+            model=get_model(),
+            temperature=LLM_TEMPERATURE,
+            max_tokens=LLM_MAX_TOKENS,
+            history=history,
+            user_input=raw_text_input,
+        )
         return PipelineResponse(
             status="success",
             ai_response_text=_extract_text_from_llm_output(raw_output),
@@ -215,4 +164,3 @@ class VoicePipeline(BasePipeline):
         ).model_dump()
 
 
-voice_pipeline = VoicePipeline()
