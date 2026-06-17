@@ -3,6 +3,7 @@ from agents.base_agent import BaseAgent
 from agents.voice_agent import create_voice_agent
 from agents.compliance_agent import create_compliance_agent
 from agents.backup_agent import create_backup_agent
+from agents.report_agent import create_report_agent
 
 
 class AgentRegistry:
@@ -12,7 +13,9 @@ class AgentRegistry:
         self._agents: Dict[str, BaseAgent] = {}
 
     def seed_defaults(self) -> None:
-        for agent in [create_voice_agent(), create_backup_agent(), create_compliance_agent()]:
+        # Insertion order determines get_active() fallback — VoiceAgent must be first.
+        for agent in [create_voice_agent(), create_backup_agent(),
+                      create_compliance_agent(), create_report_agent()]:
             self._agents[agent.id] = agent
 
     def register(self, agent: BaseAgent) -> None:

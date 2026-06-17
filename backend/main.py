@@ -1,3 +1,5 @@
+import logging
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +12,11 @@ from admin.api import router as admin_router
 from api.voice_router import router as voice_router
 
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s - %(message)s",
+)
 
 app = FastAPI(title="InTimeTec AI Voice Node Gateway")
 

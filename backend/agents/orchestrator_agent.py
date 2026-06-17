@@ -1,12 +1,9 @@
 """
-OrchestratorAgent — Sprint 1
-Single responsibility: receive (user_text, history), resolve the correct agent
-via the registry, delegate the LLM call to VoicePipeline, run post-processing,
-and return a response dict whose shape is identical to the old
-VoicePipeline.execute_stream_pipeline() return value.
+OrchestratorAgent — Sprint 2
+Single responsibility: coordinate a voice-pipeline request.
 
-Sprint 1 constraint: _resolve_agent() always delegates to registry.get_active().
-Sprint 2 extension: only _resolve_agent() changes — nothing else in this file.
+Sprint 2: _resolve_agent() uses IntentClassifier for type-based dispatch.
+Sprint 3 extension: only _resolve_agent() changes again — nothing else.
 
 What this class does NOT do:
   - No LLM client ownership
@@ -15,8 +12,10 @@ What this class does NOT do:
   - No TTS
   - No HTTP concerns
   - No business logic
+  - No intent classification logic (delegated to IntentClassifier)
 """
 import json
+import logging
 from typing import Any, Optional
 
 from agents.base_agent import AgentInput, BaseAgent
@@ -24,6 +23,7 @@ from registry.agent_registry import registry
 from config import get_model, LLM_TEMPERATURE, LLM_MAX_TOKENS
 from prompts.system_prompts import REPORT_SYSTEM_PROMPT
 from prompts.template_engine import render
+from services.intent_classifier import Intent, IntentClassifier
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +109,8 @@ class OrchestratorAgent:
     run(), the pipeline contract, voice_router, and all tests remain untouched.
     """
 
+    _log = logging.getLogger(__qualname__)
+
     def __init__(self, pipeline) -> None:
         self._pipeline = pipeline  # BasePipeline — injected, never constructed here
 
@@ -169,22 +171,82 @@ class OrchestratorAgent:
             "confidence_score": float(raw_output.get("confidence_score", 1.0)),
             "data":             raw_output,
         }
+    def _resolve_agent(
+        self,
+        user_text: str,
+        history: list
+    ) -> Optional[BaseAgent]:  # noqa: ARG002
 
-    def _resolve_agent(self, user_text: str, history: list) -> Optional[BaseAgent]:  # noqa: ARG002
-        """
-        Sprint 1: returns the first active agent from the registry (or None).
-        Behaviour is identical to the old pipeline.py registry.get_active() call.
+        self._log.info("=" * 80)
+        self._log.info("[Orchestrator] _resolve_agent called")
+        self._log.info("[Orchestrator] user_text=%r", user_text)
+        self._log.info(
+            "[Orchestrator] history_length=%s",
+            len(history) if history else 0
+        )
 
-        Sprint 2 extension — ONLY this method body changes:
+        intent = IntentClassifier.classify(user_text)
 
-            intent = _classify_intent(user_text)          # new helper
-            if intent == "RESTRICTED_REQUEST":
-                return registry.get_by_type("compliance") or registry.get_active()
-            if intent == "REPORT_REQUEST":
-                return registry.get_by_type("report") or registry.get_by_type("voice")
-            return registry.get_by_type("voice") or registry.get_active()
+        self._log.info(
+            "[Orchestrator] classified_intent=%s",
+            intent.value
+        )
 
-        run(), pipeline.execute(), voice_router, and all existing tests
-        are completely unaffected by that change.
-        """
-        return registry.get_active()
+        if intent == Intent.RESTRICTED_REQUEST:
+            self._log.info(
+                "[Orchestrator] looking for compliance agent"
+            )
+
+            agent = registry.get_by_type("compliance")
+
+            if not agent:
+                self._log.warning(
+                    "[Orchestrator] compliance agent not found, "
+                    "falling back to get_active()"
+                )
+                agent = registry.get_active()
+
+        elif intent == Intent.REPORT_REQUEST:
+            self._log.info(
+                "[Orchestrator] looking for report agent"
+            )
+
+            agent = registry.get_by_type("report")
+
+            if not agent:
+                self._log.warning(
+                    "[Orchestrator] report agent not found, "
+                    "falling back to get_active()"
+                )
+                agent = registry.get_active()
+
+        else:
+            self._log.info(
+                "[Orchestrator] looking for voice agent"
+            )
+
+            agent = registry.get_by_type("voice")
+
+            if not agent:
+                self._log.warning(
+                    "[Orchestrator] voice agent not found, "
+                    "falling back to get_active()"
+                )
+                agent = registry.get_active()
+
+        if agent:
+            self._log.info(
+                "[Orchestrator] selected agent=%s | class=%s | id=%s | active=%s",
+                agent.agent_type(),
+                agent.__class__.__name__,
+                getattr(agent, "agent_id", "N/A"),
+                getattr(agent, "is_active", "N/A"),
+            )
+        else:
+            self._log.error(
+                "[Orchestrator] No agent found after fallback chain"
+            )
+
+        self._log.info("=" * 80)
+
+        return agent

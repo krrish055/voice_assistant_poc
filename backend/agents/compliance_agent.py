@@ -4,6 +4,7 @@ from typing import Dict, List
 from agents.base_agent import BaseAgent, AgentConfig, AgentInput, AgentOutput
 from prompts.template_engine import build_prompt, PromptContext
 from prompts.system_prompts import COMPLIANCE_AGENT_PROMPT
+from config import get_model, LLM_TEMPERATURE, LLM_MAX_TOKENS
 
 _DEFAULT_RULES: List[str] = [
     "Never disclose salary, payroll, or HR data without admin approval.",
@@ -57,9 +58,9 @@ def create_compliance_agent() -> ComplianceAgent:
     config = AgentConfig(
         agent_id="agent-3",
         name="Compliance Agent",
-        model="llama-3.3-70b-versatile",
-        temperature=0.5,
-        max_tokens=1500,
-        system_prompt=COMPLIANCE_AGENT_PROMPT,
+        model=get_model(),
+        temperature=LLM_TEMPERATURE,
+        max_tokens=LLM_MAX_TOKENS,
+        system_prompt='COMPLIANCE_AGENT_PROMPT',
     )
     return ComplianceAgent(id="agent-3", name="Compliance Agent", config=config, is_active=True)
