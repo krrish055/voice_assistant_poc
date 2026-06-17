@@ -4,7 +4,7 @@ from typing import Dict
 from agents.base_agent import BaseAgent, AgentConfig, AgentInput, AgentOutput
 from prompts.template_engine import build_prompt, PromptContext
 from prompts.system_prompts import REPORT_SYSTEM_PROMPT
-
+from config import get_model, LLM_TEMPERATURE, LLM_MAX_TOKENS
 
 @dataclass
 class VoiceAgent(BaseAgent):
@@ -43,9 +43,9 @@ def create_voice_agent() -> VoiceAgent:
     config = AgentConfig(
         agent_id="agent-1",
         name="Primary Agent",
-        model="llama-3.3-70b-versatile",
-        temperature=0.7,
-        max_tokens=1000,
-        system_prompt=REPORT_SYSTEM_PROMPT,
+        model=get_model(),
+        temperature=LLM_TEMPERATURE,
+        max_tokens=LLM_MAX_TOKENS,
+        system_prompt='REPORT_AGENT_PROMPT',
     )
     return VoiceAgent(id="agent-1", name="Primary Agent", config=config, is_active=True)

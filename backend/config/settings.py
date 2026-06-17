@@ -4,8 +4,8 @@ from exceptions import ConfigurationError
 
 GROQ_BASE_URL   = 'https://api.groq.com/openai/v1'
 DEFAULT_MODEL   = 'llama-3.3-70b-versatile'
-LLM_TEMPERATURE = 0.4
-LLM_MAX_TOKENS  = 4000
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.4"))
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4000"))
 
 # Speech processor
 MIN_AUDIO_BYTES_THRESHOLD = 5000
