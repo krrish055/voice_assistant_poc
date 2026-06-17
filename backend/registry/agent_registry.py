@@ -24,6 +24,14 @@ class AgentRegistry:
     def get_active(self) -> Optional[BaseAgent]:
         return next((a for a in self._agents.values() if a.is_active), None)
 
+    def get_by_type(self, agent_type: str) -> Optional[BaseAgent]:
+        """Return the first active agent matching agent_type().
+        Used by the orchestrator for intent-based routing in Sprint 2+."""
+        return next(
+            (a for a in self._agents.values() if a.is_active and a.agent_type() == agent_type),
+            None,
+        )
+
     def list_all(self) -> list:
         return [a.to_dict() for a in self._agents.values()]
 
