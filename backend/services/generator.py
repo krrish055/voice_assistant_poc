@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fpdf import FPDF
 
-from config import PPTX_EMU_WIDTH, PPTX_EMU_HEIGHT, DEFAULT_REPORT_TITLE
+from config import PPTX_EMU_WIDTH, PPTX_EMU_HEIGHT, DEFAULT_REPORT_TITLE, COMPANY_NAME
 from exceptions import DocumentGenerationError
 from utils import safe_path, REPORTS_DIR
 
@@ -30,7 +30,7 @@ class GeneratorService:
             # Slide 1: Title
             s1 = prs.slides.add_slide(prs.slide_layouts[0])
             s1.shapes.title.text = _sanitize(ai_data.get('report_title', DEFAULT_REPORT_TITLE)).upper()
-            s1.placeholders[1].text = f'InTimeTec Compliance Node  |  Session: {session_id}'
+            s1.placeholders[1].text = f'{COMPANY_NAME} Compliance Node  |  Session: {session_id}'
 
             # Slide 2: Executive Summary
             s2 = prs.slides.add_slide(prs.slide_layouts[1])

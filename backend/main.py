@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from exceptions import AppBaseException
 from handlers import global_app_exception_handler
-from config import get_allowed_origins
+from config import get_allowed_origins, COMPANY_NAME
 from graph.graph_client import graph_client
 from admin.api import router as admin_router
 from api.voice_router import router as voice_router
@@ -18,7 +18,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(name)s - %(message)s",
 )
 
-app = FastAPI(title="InTimeTec AI Voice Node Gateway")
+app = FastAPI(title=f"{COMPANY_NAME} AI Voice Node Gateway")
 
 
 @app.on_event("startup")

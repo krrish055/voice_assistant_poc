@@ -5,9 +5,11 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 
-from services import voice_pipeline, orchestrator, SpeechProcessorService, ResponseBuilderService
+from services.container import voice_pipeline, orchestrator
+from services.speech_processor import SpeechProcessorService
+from services.response_builder import ResponseBuilderService
 from utils import validate_session, safe_path, cleanup_old_audio, REPORTS_DIR
-from config import AUDIO_FILE_SECURITY_REGEX
+from config import AUDIO_FILE_SECURITY_REGEX, COMPANY_NAME
 from schemas import VoiceStreamPayload, VoiceEnvelopeResponse, WelcomeResponse, TTSResponse, TokenResponse
 from prompts import render, WELCOME_TEXT
 from graph.graph_repository import graph_repo
@@ -17,7 +19,7 @@ router = APIRouter(prefix="/api/voice", tags=["Voice"])
 
 @router.get("/welcome", response_model=WelcomeResponse)
 async def voice_welcome():
-    text = render(WELCOME_TEXT, {"company": "InTimeTec"})
+    text = render(WELCOME_TEXT, {"company": COMPANY_NAME})
     audio_path = await SpeechProcessorService.text_to_speech(text, "welcome")
     if not audio_path:
         raise HTTPException(status_code=500, detail="Failed to generate welcome audio.")
@@ -27,16 +29,24 @@ async def voice_welcome():
 @router.post("/process-transcript", response_model=VoiceEnvelopeResponse)
 async def process_transcript(payload: VoiceStreamPayload):
     history = graph_repo.get_session_history(payload.sessionId)
-    result = await orchestrator.run(user_text=payload.textChunk, history=history)
+    result = await orchestrator.run(
+        user_text=payload.textChunk, history=history, session_id=payload.sessionId
+    )
     if result.get("status") != "success":
-        return VoiceEnvelopeResponse(status=result.get("status", "error"),
-                                     user_said=payload.textChunk,
-                                     ai_response_text=result.get("ai_response_text", ""))
-    envelope = await ResponseBuilderService.build_envelope(result, payload.userId, payload.sessionId, payload.textChunk)
+        return VoiceEnvelopeResponse(
+            status=result.get("status", "error"),
+            user_said=payload.textChunk,
+            ai_response_text=result.get("ai_response_text", ""),
+        )
+    envelope = await ResponseBuilderService.build_envelope(
+        result, payload.userId, payload.sessionId, payload.textChunk
+    )
     if envelope.status == "success":
         loop = asyncio.get_running_loop()
-        loop.run_in_executor(None, graph_repo.save_turn,
-                             payload.userId, payload.sessionId, envelope.user_said, envelope.ai_response_text)
+        loop.run_in_executor(
+            None, graph_repo.save_turn,
+            payload.userId, payload.sessionId, envelope.user_said, envelope.ai_response_text,
+        )
     return envelope
 
 
@@ -52,12 +62,14 @@ async def process_audio_stream(
     if not transcript:
         return VoiceEnvelopeResponse(status="silence", user_said="", ai_response_text="")
     history = graph_repo.get_session_history(sessionId)
-    result = await orchestrator.run(user_text=transcript, history=history)
+    result = await orchestrator.run(user_text=transcript, history=history, session_id=sessionId)
     envelope = await ResponseBuilderService.build_envelope(result, userId, sessionId, transcript)
     if envelope.status == "success":
         loop = asyncio.get_running_loop()
-        loop.run_in_executor(None, graph_repo.save_turn,
-                             userId, sessionId, envelope.user_said, envelope.ai_response_text)
+        loop.run_in_executor(
+            None, graph_repo.save_turn,
+            userId, sessionId, envelope.user_said, envelope.ai_response_text,
+        )
     return envelope
 
 
@@ -87,9 +99,11 @@ def download_pptx(session_id: str):
     file_path = safe_path(REPORTS_DIR, f"Presentation_{session_id}.pptx")
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Presentation not found.")
-    return FileResponse(str(file_path),
-                        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                        filename=f"Presentation_{session_id}.pptx")
+    return FileResponse(
+        str(file_path),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=f"Presentation_{session_id}.pptx",
+    )
 
 
 @router.get("/stream-audio/{filename}")

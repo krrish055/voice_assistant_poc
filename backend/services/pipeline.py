@@ -5,48 +5,25 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, field_validator
 
 from base import BasePipeline
-from config import GROQ_BASE_URL, get_groq_api_key, get_model, LLM_TEMPERATURE, LLM_MAX_TOKENS
+from config import GROQ_BASE_URL, get_groq_api_key, get_model, LLM_TEMPERATURE, LLM_MAX_TOKENS, COMPANY_NAME
 from exceptions import LLMProcessingError
-from prompts.system_prompts import REPORT_SYSTEM_PROMPT
+from prompts.system_prompts import VOICE_AGENT_PROMPT
 from prompts.template_engine import render
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _extract_text_from_llm_output(raw: dict) -> str:
-    """Pull the human-readable spoken reply out of a parsed LLM output dict.
-    Never returns a raw JSON string.
-
-    NOTE: also defined in orchestrator_agent.py to avoid a circular import.
-    Both copies are intentionally identical — do not diverge them.
-    """
-    text = raw.get("ai_response_text", "")
-    if not isinstance(text, str) or not text.strip():
-        text = raw.get("ai_summary", "")
-    if not isinstance(text, str) or not text.strip():
-        sections = raw.get("sections") or []
-        text = sections[0].get("body", "") if sections else ""
-    return (text or "").strip()
+from utils import extract_spoken_text
 
 
 def _sanitise_ai_text(value: str) -> str:
-    """If a JSON blob somehow ends up in a text field, extract the spoken part."""
+    """Guard: if a JSON blob ends up in a text field, extract the spoken part."""
     stripped = value.strip()
     if stripped.startswith("{"):
         try:
             parsed = json.loads(stripped)
-            clean = _extract_text_from_llm_output(parsed)
+            clean = extract_spoken_text(parsed)
             return clean or "I'm sorry, I couldn't formulate a response. Please try again."
         except Exception:
             pass
     return value
 
-
-# ---------------------------------------------------------------------------
-# Response model
-# ---------------------------------------------------------------------------
 
 class PipelineResponse(BaseModel):
     status: str
@@ -57,13 +34,8 @@ class PipelineResponse(BaseModel):
     @field_validator("ai_response_text")
     @classmethod
     def must_be_plain_text(cls, v: str) -> str:
-        """Last-resort guard at the model boundary."""
         return _sanitise_ai_text(v)
 
-
-# ---------------------------------------------------------------------------
-# Pipeline
-# ---------------------------------------------------------------------------
 
 class VoicePipeline(BasePipeline):
 
@@ -77,19 +49,14 @@ class VoicePipeline(BasePipeline):
 
     @staticmethod
     def _parse_llm_output(raw: str) -> dict:
-        # Strip markdown code fences
         raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
         raw = re.sub(r"\s*```$", "", raw.strip())
-
-        # Case 1: pure JSON response
         try:
             parsed = json.loads(raw)
             if isinstance(parsed, dict):
                 return parsed
         except (json.JSONDecodeError, ValueError):
             pass
-
-        # Case 2: LLM prepended plain text before the JSON block
         brace_idx = raw.find('{')
         if brace_idx > 0:
             prefix_text = raw[:brace_idx].strip()
@@ -102,8 +69,6 @@ class VoicePipeline(BasePipeline):
                     return parsed
             except (json.JSONDecodeError, ValueError):
                 pass
-
-        # Case 3: plain text fallback
         return {"intent": "CHAT", "ai_response_text": raw, "confidence_score": 1.0}
 
     @staticmethod
@@ -123,10 +88,7 @@ class VoicePipeline(BasePipeline):
 
     async def execute(self, system_prompt: str, model: str, temperature: float,
                       max_tokens: int, history: list, user_input: str) -> dict:
-        """Pure LLM executor.
-        Accepts a fully-resolved prompt and parameters from the orchestrator.
-        Returns the raw parsed output dict. No agent awareness whatsoever.
-        """
+        """Pure LLM executor. Returns the raw parsed output dict."""
         try:
             messages = self._build_messages(system_prompt, history, user_input)
             response = await self._get_client().chat.completions.create(
@@ -137,17 +99,13 @@ class VoicePipeline(BasePipeline):
         return self._parse_llm_output(response.choices[0].message.content.strip())
 
     async def execute_stream_pipeline(self, raw_text_input: str, history: list) -> dict:
-        """Backward-compatible, agent-UNAWARE entry point.
-        Retained exclusively for the admin ChatService which manages its own
-        agent selection independently. Do NOT call this from the voice router —
-        use OrchestratorAgent.run() instead.
-        """
+        """Backward-compatible agent-unaware entry point for admin ChatService."""
         if not raw_text_input.strip():
             return PipelineResponse(
                 status="ignored", ai_response_text="Please say something.", confidence_score=0.0
             ).model_dump()
 
-        system_prompt = render(REPORT_SYSTEM_PROMPT, {"agent_name": "Aria", "company": "InTimeTec"})
+        system_prompt = render(VOICE_AGENT_PROMPT, {"agent_name": "Aria", "company": COMPANY_NAME})
         raw_output = await self.execute(
             system_prompt=system_prompt,
             model=get_model(),
@@ -158,9 +116,7 @@ class VoicePipeline(BasePipeline):
         )
         return PipelineResponse(
             status="success",
-            ai_response_text=_extract_text_from_llm_output(raw_output),
+            ai_response_text=extract_spoken_text(raw_output),
             confidence_score=float(raw_output.get("confidence_score", 1.0)),
             data=raw_output,
         ).model_dump()
-
-
