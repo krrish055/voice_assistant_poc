@@ -5,16 +5,23 @@ from exceptions import ConfigurationError
 GROQ_BASE_URL   = 'https://api.groq.com/openai/v1'
 DEFAULT_MODEL   = 'llama-3.3-70b-versatile'
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.4"))
-LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4000"))
+LLM_MAX_TOKENS  = int(os.getenv("LLM_MAX_TOKENS", "4000"))
+
+# Company
+COMPANY_NAME = os.getenv("COMPANY_NAME", "InTimeTec")
 
 # Speech processor
 MIN_AUDIO_BYTES_THRESHOLD = 5000
 MAX_TEXT_FALLBACK_LENGTH  = 4000
+TTS_VOICE                 = os.getenv("TTS_VOICE", "en-US-AriaNeural")
 
 # Presentation layout
 PPTX_EMU_WIDTH        = 12192000
 PPTX_EMU_HEIGHT       = 6858000
 DEFAULT_REPORT_TITLE  = 'EXECUTIVE REPORT'
+
+# File retention
+PDF_MAX_AGE_SECONDS = int(os.getenv("PDF_MAX_AGE_SECONDS", "86400"))
 
 # Security
 AUDIO_FILE_SECURITY_REGEX = r'audio_[a-zA-Z0-9_\-]+\.mp3'

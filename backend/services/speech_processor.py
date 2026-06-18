@@ -5,7 +5,7 @@ from fastapi import HTTPException, UploadFile
 from groq import Groq
 import edge_tts
 
-from config import get_groq_api_key, get_stt_model, MIN_AUDIO_BYTES_THRESHOLD, MAX_TEXT_FALLBACK_LENGTH
+from config import get_groq_api_key, get_stt_model, MIN_AUDIO_BYTES_THRESHOLD, MAX_TEXT_FALLBACK_LENGTH, TTS_VOICE
 from utils import REPORTS_DIR, ALLOWED_AUDIO_MIME, ALLOWED_AUDIO_EXT, safe_path
 
 _REPORTS_BASE = Path(REPORTS_DIR).resolve()
@@ -77,7 +77,7 @@ class SpeechProcessorService:
         try:
             _REPORTS_BASE.mkdir(parents=True, exist_ok=True)
             output_path = _safe_audio_path(session_id)
-            communicate = edge_tts.Communicate(text, voice='en-US-AriaNeural')
+            communicate = edge_tts.Communicate(text, voice=TTS_VOICE)
             await communicate.save(str(output_path))
             return str(output_path)
         except Exception as e:

@@ -1,10 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from typing import Dict, Optional
 from pydantic import BaseModel, Field
-import asyncio
 
 from admin.core.container import container
-from admin.domain.models import ChatMessage
 from registry.agent_registry import registry
 from admin.constants import SUCCESS_CODE
 
@@ -23,18 +21,17 @@ def get_chat_history(agent_id: str, limit: int = 50) -> Dict:
 
 
 @router.post("/{agent_id}/chat")
-def send_message(agent_id: str, request: SendMessageRequest) -> Dict:
+async def send_message(agent_id: str, request: SendMessageRequest) -> Dict:
     agent = registry.get(agent_id)
     if not agent or not agent.is_active:
         raise HTTPException(status_code=400, detail="Agent not available")
-    user_msg = ChatMessage.create_user_message(agent_id, request.content, request.variables)
-    container.chat_service._chat_repo.add_message(user_msg)
-    ai_content = asyncio.run(container.chat_service._generate_response(agent, request.content))
-    ai_msg = ChatMessage.create_ai_message(agent_id, ai_content, request.variables)
-    container.chat_service._chat_repo.add_message(ai_msg)
-    agent.update_activity()
-    return {"status": SUCCESS_CODE, "response": ai_content,
-            "user_message": user_msg.to_dict(), "ai_message": ai_msg.to_dict()}
+    try:
+        result = await container.chat_service.send_message_async(
+            agent_id, request.content, request.variables
+        )
+        return {"status": SUCCESS_CODE, **result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.delete("/{agent_id}/chat")

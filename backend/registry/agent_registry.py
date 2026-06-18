@@ -1,4 +1,5 @@
 from typing import Dict, Optional
+
 from agents.base_agent import BaseAgent
 from agents.voice_agent import create_voice_agent
 from agents.compliance_agent import create_compliance_agent
@@ -12,10 +13,15 @@ class AgentRegistry:
     def __init__(self):
         self._agents: Dict[str, BaseAgent] = {}
 
-    def seed_defaults(self) -> None:
-        # Insertion order determines get_active() fallback — VoiceAgent must be first.
-        for agent in [create_voice_agent(), create_backup_agent(),
-                      create_compliance_agent(), create_report_agent()]:
+    def seed_defaults(self, memory=None) -> None:
+        """Insertion order determines get_active() fallback — VoiceAgent must be first."""
+        agents = [
+            create_voice_agent(),
+            create_backup_agent(),
+            create_compliance_agent(),
+            create_report_agent(memory=memory),
+        ]
+        for agent in agents:
             self._agents[agent.id] = agent
 
     def register(self, agent: BaseAgent) -> None:
@@ -28,8 +34,6 @@ class AgentRegistry:
         return next((a for a in self._agents.values() if a.is_active), None)
 
     def get_by_type(self, agent_type: str) -> Optional[BaseAgent]:
-        """Return the first active agent matching agent_type().
-        Used by the orchestrator for intent-based routing in Sprint 2+."""
         return next(
             (a for a in self._agents.values() if a.is_active and a.agent_type() == agent_type),
             None,
@@ -58,4 +62,3 @@ class AgentRegistry:
 
 
 registry = AgentRegistry()
-registry.seed_defaults()

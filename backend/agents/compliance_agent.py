@@ -4,7 +4,8 @@ from typing import Dict, List
 from agents.base_agent import BaseAgent, AgentConfig, AgentInput, AgentOutput
 from prompts.template_engine import build_prompt, PromptContext
 from prompts.system_prompts import COMPLIANCE_AGENT_PROMPT
-from config import get_model, LLM_TEMPERATURE, LLM_MAX_TOKENS
+from config import get_model, LLM_TEMPERATURE, LLM_MAX_TOKENS, COMPANY_NAME
+from utils import extract_spoken_text
 
 _DEFAULT_RULES: List[str] = [
     "Never disclose salary, payroll, or HR data without admin approval.",
@@ -23,7 +24,7 @@ class ComplianceAgent(BaseAgent):
     def build_prompt(self, agent_input: AgentInput) -> str:
         ctx = PromptContext(
             agent_name=self.name,
-            company="InTimeTec",
+            company=COMPANY_NAME,
             agent_role="compliance",
             session_history=agent_input.session_history,
             compliance_rules=agent_input.compliance_rules or _DEFAULT_RULES,
@@ -39,15 +40,8 @@ class ComplianceAgent(BaseAgent):
                 data=raw_output,
                 confidence=1.0,
             )
-        if intent == "REPORT_REQUEST" and not raw_output.get("data_complete"):
-            return AgentOutput(
-                text=raw_output.get("ai_response_text", "I need more details before generating the report."),
-                intent="GATHERING",
-                data=raw_output,
-                confidence=float(raw_output.get("confidence_score", 1.0)),
-            )
         return AgentOutput(
-            text=raw_output.get("ai_response_text", ""),
+            text=extract_spoken_text(raw_output, "How can I assist you?"),
             intent=intent,
             data=raw_output,
             confidence=float(raw_output.get("confidence_score", 1.0)),
@@ -61,6 +55,6 @@ def create_compliance_agent() -> ComplianceAgent:
         model=get_model(),
         temperature=LLM_TEMPERATURE,
         max_tokens=LLM_MAX_TOKENS,
-        system_prompt='COMPLIANCE_AGENT_PROMPT',
+        system_prompt=COMPLIANCE_AGENT_PROMPT,  
     )
     return ComplianceAgent(id="agent-3", name="Compliance Agent", config=config, is_active=True)

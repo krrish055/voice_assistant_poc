@@ -5,8 +5,8 @@ from datetime import datetime
 from admin.domain.models import ChatMessage, PromptTemplate
 from admin.repositories.repository import IAgentRepository, IChatRepository, IPromptRepository
 from admin.constants import MAX_CONVERSATION_HISTORY, MAX_PROMPT_VARIABLES
+from openai import AsyncOpenAI
 from config import GROQ_BASE_URL, get_groq_api_key
-import asyncio
 
 
 class AgentService:
@@ -63,7 +63,12 @@ class ChatService:
             raise ValueError("Agent not available")
         user_msg = ChatMessage.create_user_message(agent_id, content, variables)
         self._chat_repo.add_message(user_msg)
-        ai_content = asyncio.run(self._generate_response(agent, content))
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            ai_content = loop.run_until_complete(self._generate_response(agent, content))
+        finally:
+            loop.close()
         ai_msg = ChatMessage.create_ai_message(agent_id, ai_content, variables)
         self._chat_repo.add_message(ai_msg)
         agent.update_activity()
@@ -72,6 +77,20 @@ class ChatService:
 
     def clear_history(self, agent_id: str) -> None:
         self._chat_repo.clear_history(agent_id)
+
+    async def send_message_async(self, agent_id: str, content: str, variables: Optional[Dict] = None) -> Dict:
+        agent = self._agent_repo.get_by_id(agent_id)
+        if not agent or not agent.is_active:
+            raise ValueError("Agent not available")
+        from admin.domain.models import ChatMessage
+        user_msg = ChatMessage.create_user_message(agent_id, content, variables)
+        self._chat_repo.add_message(user_msg)
+        ai_content = await self._generate_response(agent, content)
+        ai_msg = ChatMessage.create_ai_message(agent_id, ai_content, variables)
+        self._chat_repo.add_message(ai_msg)
+        agent.update_activity()
+        self._agent_repo.update(agent)
+        return {"user_message": user_msg.to_dict(), "ai_message": ai_msg.to_dict(), "response": ai_content}
 
     async def _generate_response(self, agent, user_input: str) -> str:
         try:
