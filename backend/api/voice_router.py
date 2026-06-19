@@ -1,5 +1,6 @@
 import re
 import asyncio
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
@@ -14,6 +15,7 @@ from schemas import VoiceStreamPayload, VoiceEnvelopeResponse, WelcomeResponse, 
 from prompts import render, WELCOME_TEXT
 from graph.graph_repository import graph_repo
 
+_log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/voice", tags=["Voice"])
 
 
@@ -28,9 +30,11 @@ async def voice_welcome():
 
 @router.post("/process-transcript", response_model=VoiceEnvelopeResponse)
 async def process_transcript(payload: VoiceStreamPayload):
-    history = graph_repo.get_session_history(payload.sessionId)
+    loop = asyncio.get_running_loop()
+    history = await loop.run_in_executor(None, graph_repo.get_session_history, payload.sessionId)
     result = await orchestrator.run(
-        user_text=payload.textChunk, history=history, session_id=payload.sessionId
+        user_text=payload.textChunk, history=history,
+        session_id=payload.sessionId, user_id=payload.userId,
     )
     if result.get("status") != "success":
         return VoiceEnvelopeResponse(
@@ -43,10 +47,8 @@ async def process_transcript(payload: VoiceStreamPayload):
     )
     if envelope.status == "success":
         loop = asyncio.get_running_loop()
-        loop.run_in_executor(
-            None, graph_repo.save_turn,
-            payload.userId, payload.sessionId, envelope.user_said, envelope.ai_response_text,
-        )
+        loop.run_in_executor(None, graph_repo.save_turn,
+            payload.userId, payload.sessionId, envelope.user_said, envelope.ai_response_text)
     return envelope
 
 
@@ -59,17 +61,27 @@ async def process_audio_stream(
     validate_session(sessionId)
     cleanup_old_audio(REPORTS_DIR)
     transcript = await SpeechProcessorService.extract_clean_text(audio_blob, text_fallback, sessionId)
+    _log.info("[process-stream] session=%s transcript=%r", sessionId, transcript[:80] if transcript else "")
     if not transcript:
         return VoiceEnvelopeResponse(status="silence", user_said="", ai_response_text="")
-    history = graph_repo.get_session_history(sessionId)
-    result = await orchestrator.run(user_text=transcript, history=history, session_id=sessionId)
+    loop = asyncio.get_running_loop()
+    history = await loop.run_in_executor(None, graph_repo.get_session_history, sessionId)
+    result = await orchestrator.run(
+        user_text=transcript, history=history, session_id=sessionId, user_id=userId,
+    )
+    _log.info("[process-stream] status=%s ai=%r", result.get("status"), str(result.get("ai_response_text", ""))[:80])
+    if result.get("status") != "success":
+        return VoiceEnvelopeResponse(
+            status=result.get("status", "error"),
+            user_said=transcript,
+            ai_response_text=result.get("ai_response_text", ""),
+        )
     envelope = await ResponseBuilderService.build_envelope(result, userId, sessionId, transcript)
+    _log.info("[process-stream] audio=%s", envelope.voice_response_url)
     if envelope.status == "success":
         loop = asyncio.get_running_loop()
-        loop.run_in_executor(
-            None, graph_repo.save_turn,
-            userId, sessionId, envelope.user_said, envelope.ai_response_text,
-        )
+        loop.run_in_executor(None, graph_repo.save_turn,
+            userId, sessionId, envelope.user_said, envelope.ai_response_text)
     return envelope
 
 
@@ -121,6 +133,11 @@ async def stream_audio(filename: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="Audio resource not found.")
     return FileResponse(str(path), media_type="audio/mpeg")
+
+
+@router.post("/playback-complete")
+async def playback_complete(payload: dict):
+    return {"status": "ok"}
 
 
 @router.get("/get-token", response_model=TokenResponse)

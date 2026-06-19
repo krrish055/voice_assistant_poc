@@ -12,6 +12,7 @@ from config import get_allowed_origins, COMPANY_NAME
 from graph.graph_client import graph_client
 from admin.api import router as admin_router
 from api.voice_router import router as voice_router
+from services.container import job_worker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,6 +25,7 @@ app = FastAPI(title=f"{COMPANY_NAME} AI Voice Node Gateway")
 @app.on_event("startup")
 async def startup():
     graph_client.verify()
+    job_worker.start()
 
 
 app.add_middleware(

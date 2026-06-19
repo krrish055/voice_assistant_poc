@@ -64,15 +64,22 @@ _RESTRICTED_PHRASE_PAIRS: tuple = (
 )
 
 _REPORT_ACTION_VERBS: frozenset[str] = frozenset({
-    "generate", "create", "make", "build", "write",
-    "prepare", "produce", "draft", "give me a", "i need a",
+    "generate", "genrate", "generat", "generete",  # typos
+    "create", "creat", "crete",
+    "make", "build", "write",
+    "prepare", "produce", "draft",
+    "provide", "send", "show", "get",
+    "give me", "give me a", "i need", "i need a", "i want",
     "can you make", "can you create", "can you generate",
+    "please make", "please create", "please generate",
+    "just make", "just create", "just generate",
 })
 
 _REPORT_DOCUMENT_NOUNS: frozenset[str] = frozenset({
-    "report", "pdf", "ppt", "pptx", "powerpoint",
-    "presentation", "slides", "document", "summary",
-    "briefing", "writeup", "write-up",
+    "report", "repot", "reort", "reportt",  # typos
+    "pdf", "ppt", "pptx", "powerpoint",
+    "presentation", "slides", "document", "doc",
+    "summary", "briefing", "writeup", "write-up",
 })
 
 

@@ -4,6 +4,9 @@ from typing import Dict, List
 from admin.api.agents_router import router as agents_router
 from admin.api.chat_router import router as chat_router
 from admin.api.prompt_router import router as prompt_router
+from admin.api.approvals_router import router as approvals_router
+from admin.api.jobs_router import router as jobs_router
+from admin.api.notifications_router import router as notifications_router
 from registry.agent_registry import registry
 from admin.constants import SUCCESS_CODE
 
@@ -11,6 +14,9 @@ router = APIRouter()
 router.include_router(agents_router)
 router.include_router(chat_router)
 router.include_router(prompt_router)
+router.include_router(approvals_router)
+router.include_router(jobs_router)
+router.include_router(notifications_router)
 
 _ws_clients: List[WebSocket] = []
 

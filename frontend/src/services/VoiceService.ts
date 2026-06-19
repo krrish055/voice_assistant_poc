@@ -11,7 +11,7 @@ const API = (() => {
 })();
 
 export interface StreamResponse {
-  status: 'success' | 'silence' | 'error';
+  status: 'success' | 'silence' | 'error' | 'queued';
   audio_url?: string | null;
   voice_response_url?: string | null;
   ai_response_text?: string;
@@ -77,6 +77,18 @@ const VoiceService = {
       return res.json();
     } catch {
       return { status: 'error' };
+    }
+  },
+
+  async signalPlaybackComplete(sessionId: string): Promise<void> {
+    try {
+      await fetch(`${API}/api/voice/playback-complete`, {
+        method : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body   : JSON.stringify({ sessionId }),
+      });
+    } catch {
+      // Fire-and-forget — backend has a TTL fallback if this fails
     }
   },
 };

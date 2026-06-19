@@ -10,7 +10,7 @@ export const VAD_CONFIG = {
   SPEECH_STOP_MS  : 1800,
   MAX_RECORD_MS   : 25000,
   CALIB_FRAMES    : 90,
-  NOISE_OFFSET    : 10,
+  NOISE_OFFSET    : 5,
   FFT_SIZE        : 256,
 } as const;
 
