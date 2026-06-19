@@ -58,3 +58,21 @@ class StorageError(AppBaseException):
     """DB read or write operation failed."""
     def __init__(self, message: str = '') -> None:
         super().__init__(message, status_code=500)
+
+
+class ApprovalError(AppBaseException):
+    """Approval workflow state or validation error."""
+    def __init__(self, message: str = '') -> None:
+        super().__init__(message, status_code=422)
+
+
+class JobError(AppBaseException):
+    """Background job engine error."""
+    def __init__(self, message: str = '') -> None:
+        super().__init__(message, status_code=500)
+
+
+class QueueError(AppBaseException):
+    """Session execution queue error."""
+    def __init__(self, message: str = '') -> None:
+        super().__init__(message, status_code=429)

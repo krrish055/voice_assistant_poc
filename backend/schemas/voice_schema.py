@@ -10,6 +10,11 @@ class VoiceStreamPayload(BaseModel):
     textChunk: str
 
 
+class PlaybackCompletePayload(BaseModel):
+    """Signal sent by the frontend when audio.onended fires."""
+    sessionId: str
+
+
 # ── Outbound response envelopes ───────────────────────────────────────────────
 
 class WelcomeResponse(BaseModel):

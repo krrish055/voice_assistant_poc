@@ -34,6 +34,16 @@ MAX_REPORT_HISTORY_LIMIT    = int(os.getenv("MAX_REPORT_HISTORY_LIMIT", "10000")
 # Security
 AUDIO_FILE_SECURITY_REGEX = r'audio_[a-zA-Z0-9_\-]+\.mp3'
 
+# ── Background Job Engine ─────────────────────────────────────────────────────
+JOB_MAX_RETRIES          = int(os.getenv("JOB_MAX_RETRIES", "3"))
+JOB_POLL_INTERVAL_SECS   = float(os.getenv("JOB_POLL_INTERVAL_SECS", "5.0"))
+JOB_MAX_CONCURRENT       = int(os.getenv("JOB_MAX_CONCURRENT", "4"))
+JOB_EXECUTION_TIMEOUT    = int(os.getenv("JOB_EXECUTION_TIMEOUT", "300"))
+
+# ── Notification Center ───────────────────────────────────────────────────────
+NOTIFICATION_RETENTION_DAYS = int(os.getenv("NOTIFICATION_RETENTION_DAYS", "30"))
+NOTIFICATION_MAX_UNREAD     = int(os.getenv("NOTIFICATION_MAX_UNREAD", "100"))
+
 
 def get_groq_api_key() -> str:
     key = os.getenv('GROQ_API_KEY')
