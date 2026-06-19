@@ -1,6 +1,8 @@
 import logging
 
 from dotenv import load_dotenv
+load_dotenv()  # must run before ANY module that reads os.getenv() at import time
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,8 +12,6 @@ from config import get_allowed_origins, COMPANY_NAME
 from graph.graph_client import graph_client
 from admin.api import router as admin_router
 from api.voice_router import router as voice_router
-
-load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,

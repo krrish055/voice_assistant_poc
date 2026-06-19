@@ -28,6 +28,7 @@ class ComplianceAgent(BaseAgent):
             agent_role="compliance",
             session_history=agent_input.session_history,
             compliance_rules=agent_input.compliance_rules or _DEFAULT_RULES,
+            memory_context=agent_input.memory_context,
         )
         return build_prompt(self.config.system_prompt or COMPLIANCE_AGENT_PROMPT, ctx)
 

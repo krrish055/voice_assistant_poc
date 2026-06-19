@@ -22,6 +22,7 @@ class BackupAgent(BaseAgent):
             agent_role="backup",
             session_history=agent_input.session_history[-3:],
             compliance_rules=[],
+            memory_context=agent_input.memory_context,
         )
         return build_prompt(self.config.system_prompt or BACKUP_AGENT_PROMPT, ctx)
 

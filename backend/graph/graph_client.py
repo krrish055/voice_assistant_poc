@@ -2,7 +2,11 @@ import logging
 import os
 import time
 from typing import Optional
+
+from dotenv import load_dotenv
 from neo4j import GraphDatabase, Driver
+
+load_dotenv()  # fallback: ensure env is loaded even when this module is imported directly
 
 _log = logging.getLogger(__name__)
 
@@ -21,19 +25,21 @@ class GraphClient:
                 connection_timeout=30,
                 keep_alive=True,
             )
+            self._database = os.getenv("NEO4J_DATABASE", "neo4j")
             self.enabled = True
         except Exception as e:
             _log.error("[Neo4j] Driver init failed: %s", e)
             self._driver = None
+            self._database = "neo4j"
             self.enabled = False
 
     def verify(self) -> None:
         if not self.enabled:
             return
         try:
-            with self._driver.session() as s:
+            with self._driver.session(database=self._database) as s:
                 s.run("RETURN 1").single()
-                _log.info("[Neo4j] Connection verified")
+                _log.info("[Neo4j] Connection verified (database=%s)", self._database)
         except Exception as e:
             _log.warning("[Neo4j] Verification failed: %s", e)
             self.enabled = False
@@ -44,7 +50,7 @@ class GraphClient:
             return []
         for attempt in range(3):
             try:
-                with self._driver.session() as s:
+                with self._driver.session(database=self._database) as s:
                     return [dict(r) for r in s.run(query, **params)]
             except Exception as e:
                 if attempt == 2:
@@ -60,7 +66,7 @@ class GraphClient:
             return
         for attempt in range(3):
             try:
-                with self._driver.session() as s:
+                with self._driver.session(database=self._database) as s:
                     s.run(query, **params)
                     return
             except Exception as e:

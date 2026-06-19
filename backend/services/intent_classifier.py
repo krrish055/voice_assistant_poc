@@ -39,11 +39,29 @@ class Intent(str, Enum):
 # ---------------------------------------------------------------------------
 
 _RESTRICTED_TOKENS: frozenset[str] = frozenset({
-    "salary", "salaries", "payslip", "pay slip", "pay stub",
-    "paystub", "payroll", "offer letter", "compensation",
-    "ctc", "cost to company", "increment", "hike", "bonus",
-    "tax document", "form 16", "w-2", "w2",
+    "payslip", "pay slip", "pay stub", "paystub",
+    "offer letter", "form 16", "w-2", "w2",
+    "tax document",
 })
+
+# Phrases that are only restricted when the user is requesting their OWN documents.
+# A business owner discussing salary delays or payroll strategy is NOT restricted.
+# Restriction triggers only when BOTH a possessive/request signal AND a sensitive noun appear.
+_RESTRICTED_PHRASE_PAIRS: tuple = (
+    ("my salary",    None),
+    ("my payroll",   None),
+    ("my paycheck",  None),
+    ("my ctc",       None),
+    ("my bonus",     None),
+    ("my increment", None),
+    ("show salary",  None),
+    ("see salary",   None),
+    ("get salary",   None),
+    ("salary slip",  None),
+    ("salary certificate", None),
+    ("compensation details", None),
+    ("cost to company", None),
+)
 
 _REPORT_ACTION_VERBS: frozenset[str] = frozenset({
     "generate", "create", "make", "build", "write",
@@ -71,14 +89,22 @@ class IntentClassifier:
         """Return the Intent for the given user utterance.
 
         Precedence: RESTRICTED_REQUEST > REPORT_REQUEST > CHAT
+
+        RESTRICTED only triggers for explicit personal document/data requests
+        (e.g. "show me my salary slip"), NOT for business context discussions
+        (e.g. "salaries are delayed", "payroll strategy", "employee bonus plan").
         """
         if not user_text or not user_text.strip():
             return Intent.CHAT
 
         text = user_text.lower()
 
-        # --- RESTRICTED (highest priority) ----------------------------------
+        # --- RESTRICTED: exact document tokens (payslip, form 16, etc.) ----
         if any(token in text for token in _RESTRICTED_TOKENS):
+            return Intent.RESTRICTED_REQUEST
+
+        # --- RESTRICTED: possessive/request phrases -------------------------
+        if any(phrase in text for phrase, _ in _RESTRICTED_PHRASE_PAIRS):
             return Intent.RESTRICTED_REQUEST
 
         # --- REPORT (requires action verb + document noun) ------------------

@@ -22,6 +22,8 @@ class AgentInput:
     user_text: str
     session_history: List[Dict] = field(default_factory=list)
     compliance_rules: List[str] = field(default_factory=list)
+    session_id: str = ""
+    memory_context: str = ""
 
 
 @dataclass
