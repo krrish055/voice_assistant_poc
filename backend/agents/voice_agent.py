@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import Dict
+from dataclasses import dataclass, field
+from typing import Dict, Optional
 
 from agents.base_agent import BaseAgent, AgentConfig, AgentInput, AgentOutput
 from prompts.template_engine import build_prompt, PromptContext
@@ -22,6 +22,7 @@ class VoiceAgent(BaseAgent):
             agent_role="voice",
             session_history=agent_input.session_history,
             compliance_rules=[],
+            memory_context=agent_input.memory_context,
         )
         return build_prompt(self.config.system_prompt or VOICE_AGENT_PROMPT, ctx)
 

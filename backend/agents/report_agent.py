@@ -1,20 +1,19 @@
 """
 agents/report_agent.py
 
-Single responsibility: drive the slot-collection conversation for report requests.
+Single responsibility: drive slot-collection conversation for report requests.
 
 What this agent does:
-  - Builds the slot-collection prompt with confirmed slots injected
+  - Injects confirmed slots + memory context into prompt
   - Parses LLM response to extract newly confirmed slots
-  - Updates MemoryService with any new slots
-  - Returns a conversational spoken reply and slot-complete state
+  - Delegates slot storage to SessionMemoryService
+  - Returns conversational spoken reply and completion state
 
 What this agent does NOT do:
   - Generate PDF or PPTX
-  - Call GeneratorService
+  - Make LLM calls for report content
   - Store memory internally
-  - Perform tool execution
-  - Generate report content, sections, or summaries
+  - Execute tools
 """
 from dataclasses import dataclass, field
 from typing import Dict, Optional
@@ -22,7 +21,7 @@ from typing import Dict, Optional
 from agents.base_agent import BaseAgent, AgentConfig, AgentInput, AgentOutput
 from prompts.template_engine import build_prompt, PromptContext
 from prompts.system_prompts import REPORT_AGENT_PROMPT
-from services.memory_service import IMemoryService
+from services.session_memory import ISessionMemory
 from config import get_model, LLM_TEMPERATURE, LLM_MAX_TOKENS, COMPANY_NAME
 from utils import extract_spoken_text
 
@@ -31,7 +30,7 @@ from utils import extract_spoken_text
 class ReportAgent(BaseAgent):
     """Slot-collection agent for report requests."""
 
-    memory: Optional[IMemoryService] = field(default=None)
+    memory: Optional[ISessionMemory] = field(default=None)
 
     def agent_type(self) -> str:
         return "report"
@@ -43,17 +42,14 @@ class ReportAgent(BaseAgent):
             agent_role="report",
             session_history=agent_input.session_history,
             compliance_rules=[],
+            memory_context=agent_input.memory_context,
         )
         return build_prompt(self.config.system_prompt or REPORT_AGENT_PROMPT, ctx)
 
     def post_process(self, raw_output: Dict, session_id: str = "") -> AgentOutput:
-        """
-        Parse LLM output, update memory with any newly confirmed slots,
-        return spoken reply and completion state.
-        """
         if session_id and self.memory:
             self._sync_slots(raw_output, session_id)
-            slots_complete = self.memory.is_complete(session_id)
+            slots_complete = self.memory.is_slots_complete(session_id)
         else:
             slots_complete = bool(raw_output.get("data_complete"))
 
@@ -68,26 +64,36 @@ class ReportAgent(BaseAgent):
             data={
                 **raw_output,
                 "slots_complete": slots_complete,
-                "data_complete": slots_complete,
+                "data_complete":  slots_complete,
             },
             confidence=float(raw_output.get("confidence_score", 1.0)),
         )
 
+    @staticmethod
+    def _is_valid(value) -> bool:
+        """Reject None, empty string, and LLM null-placeholder strings."""
+        if value is None:
+            return False
+        return str(value).strip().lower() not in ("", "null", "none")
+
     def _sync_slots(self, raw: Dict, session_id: str) -> None:
-        """Persist any newly confirmed slots from the LLM response into memory."""
-        if raw.get("topic"):
-            self.memory.update_slot(session_id, "topic", raw["topic"])
-        if raw.get("page_count"):
+        topic = raw.get("topic")
+        if self._is_valid(topic):
+            self.memory.update_slot(session_id, "topic", str(topic).strip())
+
+        page = raw.get("page_count")
+        if self._is_valid(page):
             try:
-                self.memory.update_slot(session_id, "page_count", int(raw["page_count"]))
+                self.memory.update_slot(session_id, "page_count", int(page))
             except (ValueError, TypeError):
                 pass
-        fmt = (raw.get("output_format") or "").upper()
+
+        fmt = (raw.get("output_format") or "").strip().upper()
         if fmt in ("PDF", "PPTX"):
             self.memory.update_slot(session_id, "output_format", fmt)
 
 
-def create_report_agent(memory: IMemoryService) -> ReportAgent:
+def create_report_agent(memory: ISessionMemory) -> ReportAgent:
     config = AgentConfig(
         agent_id="agent-4",
         name="Report Agent",
