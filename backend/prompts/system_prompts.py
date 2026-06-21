@@ -88,8 +88,13 @@ CRITICAL INSTRUCTIONS:
 - Every section must contain real, specific content from what the user actually discussed.
 - Do not use placeholder text. Reference actual names, numbers, facts from the conversation.
 - The sections array MUST contain exactly ${page_count} items. No more, no less.
-- Each section body should be 3-5 substantive paragraphs built from the conversation.
+- Each section body should be 3-5 substantive sentences of professional prose.
+- Separate paragraphs within a section body using a blank line (double newline).
+- For each section you MAY include up to 5 bullet points (key facts, max 15 words each).
 - Do NOT add any text outside the JSON object. No markdown fences, no preamble.
+- report_subtitle should be a concise 4-8 word descriptor of the report type and period.
+- client should be the organization or person the report is prepared for.
+- department should reflect the relevant business unit.
 
 OUTPUT FORMAT — return ONLY valid JSON:
 {
@@ -97,9 +102,19 @@ OUTPUT FORMAT — return ONLY valid JSON:
     "data_complete": true,
     "output_format": "${output_format}",
     "report_title": "${report_title}",
+    "report_subtitle": "Short descriptor — Year",
+    "client": "Client or organization name",
+    "department": "Relevant department",
     "confidence_score": 0.99,
     "structured_data": [{"item": "Parameter", "value": "Value"}],
-    "ai_summary": "Executive summary built entirely from the user's actual conversation.",
-    "sections": [{"heading": "Section Title", "body": "Content sourced from the conversation."}],
+    "ai_summary": "Executive summary built entirely from the user's actual conversation. 3-5 sentences.",
+    "sections": [
+        {
+            "heading": "Section Title",
+            "body": "Professional prose sourced from the conversation.\n\nSecond paragraph if needed.",
+            "bullets": ["Key fact one", "Key fact two"],
+            "note": "Optional source note or disclaimer, or omit this field."
+        }
+    ],
     "ai_response_text": "Your report has been generated based on our complete conversation."
 }"""
