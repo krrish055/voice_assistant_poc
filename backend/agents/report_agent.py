@@ -48,6 +48,8 @@ class ReportAgent(BaseAgent):
 
     def post_process(self, raw_output: Dict, session_id: str = "") -> AgentOutput:
         if session_id and self.memory:
+            # Enter report workflow on first ReportAgent turn and keep routing until generation completes.
+            self.memory.mark_report_started(session_id)
             self._sync_slots(raw_output, session_id)
             slots_complete = self.memory.is_slots_complete(session_id)
         else:
@@ -71,7 +73,6 @@ class ReportAgent(BaseAgent):
 
     @staticmethod
     def _is_valid(value) -> bool:
-        """Reject None, empty string, and LLM null-placeholder strings."""
         if value is None:
             return False
         return str(value).strip().lower() not in ("", "null", "none")
@@ -80,6 +81,17 @@ class ReportAgent(BaseAgent):
         topic = raw.get("topic")
         if self._is_valid(topic):
             self.memory.update_slot(session_id, "topic", str(topic).strip())
+
+        # Accumulate key_facts across turns — merge with any already stored
+        new_facts = raw.get("key_facts") or []
+        if isinstance(new_facts, list) and new_facts:
+            existing = self.memory.get_slots(session_id).get("key_facts") or []
+            merged = list({f for f in existing + new_facts if f})
+            self.memory.update_slot(session_id, "key_facts", merged)
+
+        goal = raw.get("goal")
+        if self._is_valid(goal):
+            self.memory.update_slot(session_id, "goal", str(goal).strip())
 
         page = raw.get("page_count")
         if self._is_valid(page):

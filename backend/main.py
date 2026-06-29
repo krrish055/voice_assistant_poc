@@ -1,4 +1,5 @@
 import logging
+import os
 
 from dotenv import load_dotenv
 load_dotenv()  # must run before ANY module that reads os.getenv() at import time
@@ -14,10 +15,18 @@ from admin.api import router as admin_router
 from api.voice_router import router as voice_router
 from services.container import job_worker
 
+# ── Logging: console + rolling file ──────────────────────────────────────────
+_LOG_FILE = os.path.join(os.path.dirname(__file__), "app.log")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)-8s %(name)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),                          # terminal
+        logging.FileHandler(_LOG_FILE, encoding="utf-8"), # file  ← open backend/app.log
+    ],
 )
+logging.getLogger("uvicorn.access").propagate = True
 
 app = FastAPI(title=f"{COMPANY_NAME} AI Voice Node Gateway")
 

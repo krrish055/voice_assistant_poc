@@ -28,7 +28,7 @@ MEMORY_MAX_FACTS            = int(os.getenv("MEMORY_MAX_FACTS", "50"))
 MEMORY_SUMMARY_TURNS        = int(os.getenv("MEMORY_SUMMARY_TURNS", "6"))
 MEMORY_HISTORY_WINDOW       = int(os.getenv("MEMORY_HISTORY_WINDOW", "20"))
 REPORT_HISTORY_WINDOW       = int(os.getenv("REPORT_HISTORY_WINDOW", "8"))      # turns injected into report agent prompt
-REPORT_MAX_TOKENS           = int(os.getenv("REPORT_MAX_TOKENS", "8000"))       # higher limit for report content generation
+REPORT_MAX_TOKENS           = int(os.getenv("REPORT_MAX_TOKENS", "16000"))      # large output for full-page section content
 MAX_REPORT_HISTORY_LIMIT    = int(os.getenv("MAX_REPORT_HISTORY_LIMIT", "10000")) # upper bound for full session fetch
 
 # Security

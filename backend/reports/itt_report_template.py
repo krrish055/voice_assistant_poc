@@ -194,20 +194,24 @@ def _draw_header_footer(c, doc):
 
 def _styles():
     S = {}
-    S["h1"]     = ParagraphStyle("H1", fontName="Helvetica-Bold", fontSize=20,
-                    textColor=BRAND["black"], spaceAfter=8, spaceBefore=18, leading=26)
-    S["h2"]     = ParagraphStyle("H2", fontName="Helvetica-Bold", fontSize=13,
-                    textColor=BRAND["orange"], spaceAfter=5, spaceBefore=12, leading=17)
+    S["h1"]     = ParagraphStyle("H1", fontName="Helvetica-Bold", fontSize=22,
+                    textColor=BRAND["black"], spaceAfter=10, spaceBefore=20, leading=28)
+    S["h2"]     = ParagraphStyle("H2", fontName="Helvetica-Bold", fontSize=14,
+                    textColor=BRAND["orange"], spaceAfter=6, spaceBefore=14, leading=18)
     S["h3"]     = ParagraphStyle("H3", fontName="Helvetica-Bold", fontSize=11,
                     textColor=BRAND["dark_gray"], spaceAfter=4, spaceBefore=8, leading=15)
-    S["body"]   = ParagraphStyle("Body", fontName="Helvetica", fontSize=10,
-                    textColor=BRAND["dark_gray"], spaceAfter=6, leading=16, alignment=TA_JUSTIFY)
+    S["body"]   = ParagraphStyle("Body", fontName="Helvetica", fontSize=10.5,
+                    textColor=BRAND["dark_gray"], spaceAfter=8, leading=17, alignment=TA_JUSTIFY)
     S["bullet"] = ParagraphStyle("Bullet", fontName="Helvetica", fontSize=10,
-                    textColor=BRAND["dark_gray"], spaceAfter=3, leading=15, leftIndent=16)
+                    textColor=BRAND["dark_gray"], spaceAfter=5, leading=16,
+                    leftIndent=20, bulletIndent=6)
+    S["summary"]= ParagraphStyle("Summary", fontName="Helvetica", fontSize=10.5,
+                    textColor=BRAND["dark_gray"], spaceAfter=8, leading=17,
+                    alignment=TA_JUSTIFY, leftIndent=8, rightIndent=8)
     S["th"]     = ParagraphStyle("TH", fontName="Helvetica-Bold", fontSize=9,
                     textColor=BRAND["white"], alignment=TA_CENTER, leading=12)
     S["td"]     = ParagraphStyle("TD", fontName="Helvetica", fontSize=9,
-                    textColor=BRAND["dark_gray"], leading=13)
+                    textColor=BRAND["dark_gray"], leading=14)
     return S
 
 
@@ -227,12 +231,13 @@ class _SectionDivider(Flowable):
 
 
 class _HighlightBox(Flowable):
-    _IW = 34; _PY = 10; _LH = 13; _F = "Helvetica-Bold"; _FS = 9.5
+    _IW = 38; _PY = 12; _LH = 14; _F = "Helvetica-Bold"; _FS = 10
 
     def __init__(self, text, icon="▶"):
         super().__init__(); self.text = text; self.icon = icon; self.width = CONTENT_W
-        lines = _wrap(text, self._F, self._FS, self.width - self._IW - 10)
-        self.height = max(36, self._PY * 2 + len(lines) * self._LH)
+        # Wrap to available width and compute actual height needed
+        lines = _wrap(text, self._F, self._FS, self.width - self._IW - 14)
+        self.height = max(44, self._PY * 2 + len(lines) * self._LH)
 
     def draw(self):
         c = self.canv
@@ -371,41 +376,62 @@ class ITTPDFTemplate:
 
         story = [PageBreak()]
 
-        # Executive Summary
+        # ── Executive Summary page ────────────────────────────────────────────
         story.extend(self._section("Executive Summary"))
         if summary:
-            story.extend(self._highlight(summary[:200] if len(summary) > 200 else summary))
-            story.append(self._body(summary))
+            # Full summary in highlight box (no truncation)
+            story.extend(self._highlight(summary))
+            story.append(Spacer(1, 6))
+            # Also render full summary as body paragraphs
+            for para in summary.split("\n\n"):
+                para = para.strip()
+                if para:
+                    story.append(Paragraph(para, self._styles["summary"]))
+                    story.append(Spacer(1, 4))
 
-        # Structured data table
+        # ── Key Data table ────────────────────────────────────────────────────
         if struct:
-            story.extend(self._section("Key Data"))
+            story.append(PageBreak())
+            story.extend(self._section("Key Data & Parameters"))
             story.extend(self._table(
                 ["Parameter", "Value"],
                 [[r.get("item", ""), r.get("value", "")] for r in struct],
-                col_widths=[CONTENT_W * 0.5, CONTENT_W * 0.5],
+                col_widths=[CONTENT_W * 0.45, CONTENT_W * 0.55],
             ))
 
-        # Content sections
+        # ── Content sections ──────────────────────────────────────────────────
         for sec in sections:
             story.append(PageBreak())
             story.extend(self._section(sec.get("heading", "Section")))
-            body_text = sec.get("body", "")
-            # Split on double newline into paragraphs
-            for para in body_text.split("\n\n"):
-                para = para.strip()
-                if para:
-                    story.append(self._body(para))
-                    story.append(Spacer(1, 6))
+            story.append(Spacer(1, 4))
 
-            # Bullet points if provided
+            body_text = sec.get("body", "")
+            paragraphs = [p.strip() for p in body_text.split("\n\n") if p.strip()]
+            for para in paragraphs:
+                story.append(self._body(para))
+                story.append(Spacer(1, 4))
+
             bullets = sec.get("bullets", [])
             if bullets:
-                story.extend(self._bullets(bullets))
+                story.append(Spacer(1, 6))
+                story.append(HRFlowable(
+                    width=CONTENT_W, thickness=1.5,
+                    color=BRAND["orange"], spaceAfter=8,
+                ))
+                story.append(Paragraph(
+                    "<font color='#F7941D'><b>Key Insights</b></font>",
+                    self._styles["h3"],
+                ))
+                for b in bullets:
+                    story.append(Paragraph(
+                        f"<font color='#F7941D'>&#x25CF;</font>  {b}",
+                        self._styles["bullet"],
+                    ))
+                    story.append(Spacer(1, 2))
 
-            # Note if provided
             note = sec.get("note", "")
             if note:
+                story.append(Spacer(1, 8))
                 story.extend(self._note(note))
 
         def on_cover(c, d):
