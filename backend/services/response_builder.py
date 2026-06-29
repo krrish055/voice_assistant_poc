@@ -2,15 +2,6 @@
 services/response_builder.py
 
 Single responsibility: assemble the VoiceEnvelopeResponse from an orchestrator result.
-
-What this class does NOT do:
-  - No document generation
-  - No format detection
-  - No LLM calls
-  - No business logic
-
-Tool URLs (download_url, pptx_url) are resolved upstream by OrchestratorAgent
-and arrive pre-populated in result["data"].
 """
 from pathlib import Path
 
@@ -27,8 +18,9 @@ class ResponseBuilderService:
         ai_response_text = result.get("ai_response_text") or "How can I help you?"
         data             = result.get("data", {})
 
-        download_url = data.get("download_url")
-        pptx_url     = data.get("pptx_url")
+        # URLs may be at top-level (set by ReportGenerationService) or inside data
+        download_url = result.get("download_url") or data.get("download_url")
+        pptx_url     = result.get("pptx_url")     or data.get("pptx_url")
 
         audio_path = await SpeechProcessorService.text_to_speech(ai_response_text, session_id)
         audio_url  = f"/api/voice/stream-audio/{Path(audio_path).name}" if audio_path else None

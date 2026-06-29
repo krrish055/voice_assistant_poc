@@ -22,33 +22,32 @@ class ToolExecutorService:
 
     @staticmethod
     def execute_pdf(report_data: dict, session_id: str) -> Optional[str]:
-        """Generate PDF. Returns download URL or None on failure."""
         try:
             path = GeneratorService.generate_dynamic_pdf(report_data, session_id)
-            _log.info("[ToolExecutor] PDF generated: %s", path)
+            _log.info("[ToolExecutor] PDF generated path=%s", path)
             return f"/api/voice/download-report/{session_id}"
         except Exception as e:
-            _log.error("[ToolExecutor] PDF generation failed: %s", e)
+            _log.error("[ToolExecutor] PDF generation FAILED session=%s error=%s", session_id, e, exc_info=True)
             return None
 
     @staticmethod
     def execute_ppt(report_data: dict, session_id: str) -> Optional[str]:
-        """Generate PPTX. Returns download URL or None on failure."""
         try:
             path = GeneratorService.generate_dynamic_pptx(report_data, session_id)
-            _log.info("[ToolExecutor] PPTX generated: %s", path)
+            _log.info("[ToolExecutor] PPTX generated path=%s", path)
             return f"/api/voice/download-pptx/{session_id}"
         except Exception as e:
-            _log.error("[ToolExecutor] PPTX generation failed: %s", e)
+            _log.error("[ToolExecutor] PPTX generation FAILED session=%s error=%s", session_id, e, exc_info=True)
             return None
 
     @staticmethod
     def execute(output_format: str, report_data: dict, session_id: str) -> dict:
         """
-        Dispatch to the correct tool based on output_format.
+        Always generate both PDF and PPTX so the frontend always has both links.
+        output_format is ignored for dispatch — both tools run every time.
         Returns: {"download_url": str|None, "pptx_url": str|None}
         """
-        fmt = (output_format or "PDF").upper()
-        if fmt == "PPTX":
-            return {"download_url": None, "pptx_url": ToolExecutorService.execute_ppt(report_data, session_id)}
-        return {"download_url": ToolExecutorService.execute_pdf(report_data, session_id), "pptx_url": None}
+        return {
+            "download_url": ToolExecutorService.execute_pdf(report_data, session_id),
+            "pptx_url":     ToolExecutorService.execute_ppt(report_data, session_id),
+        }

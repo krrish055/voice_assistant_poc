@@ -28,16 +28,16 @@ class GraphRepository:
             if ai_text.lstrip().startswith("{"):
                 try:
                     parsed = json.loads(ai_text)
-                    ai_text = (
-                        parsed.get("ai_response_text")
-                        or parsed.get("ai_summary")
-                        or next((s["body"] for s in parsed.get("sections", []) if s.get("body")), "")
-                        or ""
-                    )
+                    # Replay safety: only allow plain assistant text from ai_response_text.
+                    # Do NOT replay structured report/tool payloads derived from ai_summary or sections[*].body.
+                    ai_text = parsed.get("ai_response_text") or ""
+                    if not ai_text.strip():
+                        ai_text = "[Structured response omitted]"
                 except Exception:
-                    ai_text = ""
+                    ai_text = "[Structured response omitted]"
             turns.append({"user_input": r.get("user_input") or "", "ai_response_text": ai_text})
         return turns
+
 
     def get_conversations_by_user(self, user_id: str) -> List[dict]:
         return graph_client.run(GET_CONVERSATIONS_BY_USER, user_id=user_id)

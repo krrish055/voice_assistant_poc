@@ -1,25 +1,24 @@
 import logging
+import os
 from typing import Optional
 
 from agents.base_agent import AgentInput, AgentOutput, BaseAgent
 from approvals.service import ApprovalService
-from config import get_model, LLM_TEMPERATURE, LLM_MAX_TOKENS, COMPANY_NAME, REPORT_HISTORY_WINDOW, REPORT_MAX_TOKENS
+from config import get_model, LLM_TEMPERATURE, LLM_MAX_TOKENS, COMPANY_NAME
 from constants import (
-    ERR_REPORT_LLM_FAILED, ERR_REPORT_BAD_FORMAT, ERR_REPORT_NO_SECTIONS,
-    ERR_REPORT_FILE_SAVE_FAILED,
-    MSG_PLEASE_SAY_SOMETHING, MSG_HOW_CAN_I_HELP,
+    MSG_PLEASE_SAY_SOMETHING,
+    MSG_HOW_CAN_I_HELP,
     MSG_APPROVAL_PENDING,
 )
 from events.dispatcher import EventDispatcher
-from graph.graph_repository import graph_repo
 from jobs.service import JobService
-from prompts.system_prompts import VOICE_AGENT_PROMPT, REPORT_GENERATION_PROMPT
+from prompts.system_prompts import VOICE_AGENT_PROMPT
 from prompts.template_engine import render
 from registry.agent_registry import registry
 from services.fact_extractor import FactExtractorService
 from services.intent_classifier import Intent, IntentClassifier
 from services.session_memory import ISessionMemory
-from services.tool_executor import ToolExecutorService
+from services.report_generation_service import ReportGenerationService
 from utils import extract_spoken_text
 
 _log = logging.getLogger(__name__)
@@ -35,11 +34,12 @@ class OrchestratorAgent:
         job_service: JobService,
         dispatcher: EventDispatcher,
     ) -> None:
-        self._pipeline         = pipeline
-        self._memory           = memory
+        self._pipeline = pipeline
+        self._memory = memory
         self._approval_service = approval_service
-        self._job_service      = job_service
-        self._dispatcher       = dispatcher
+        self._job_service = job_service
+        self._dispatcher = dispatcher
+        self._report_generation_service = ReportGenerationService()
 
     async def run(
         self,
@@ -64,8 +64,14 @@ class OrchestratorAgent:
         session_id: str,
         user_id: str,
     ) -> dict:
+        # Prefer in-process turn history (always up-to-date) over the graph-fetched
+        # history passed in — the graph write is fire-and-forget and may lag by one turn.
+        if session_id:
+            in_process = self._memory.get_recent_turns(session_id)
+            if in_process:
+                history = in_process
         memory_context = self._memory.get_context_block(session_id) if session_id else ""
-        agent: Optional[BaseAgent] = self._resolve_agent(user_text, session_id)
+        agent, intent = await self._resolve_agent(user_text, session_id)
 
         agent_input = AgentInput(
             user_text=user_text,
@@ -76,13 +82,13 @@ class OrchestratorAgent:
 
         if agent:
             system_prompt = agent.build_prompt(agent_input)
-            model         = agent.config.model
-            temperature   = agent.config.temperature
-            max_tokens    = agent.config.max_tokens
+            model = agent.config.model
+            temperature = agent.config.temperature
+            max_tokens = agent.config.max_tokens
         else:
             system_prompt = render(VOICE_AGENT_PROMPT, {
-                "agent_name":     "Aria",
-                "company":        COMPANY_NAME,
+                "agent_name": os.getenv("AGENT_NAME", "Aria"),
+                "company": COMPANY_NAME,
                 "memory_context": memory_context,
             })
             model, temperature, max_tokens = get_model(), LLM_TEMPERATURE, LLM_MAX_TOKENS
@@ -96,7 +102,6 @@ class OrchestratorAgent:
             user_input=user_text,
         )
 
-        intent = IntentClassifier.classify(user_text)
         if intent == Intent.RESTRICTED_REQUEST and session_id:
             return await self._handle_restricted(user_text, session_id, user_id, raw_output)
 
@@ -107,11 +112,15 @@ class OrchestratorAgent:
                 for k, v in facts.items():
                     self._memory.set_fact(session_id, k, v)
                 self._memory.add_turn(session_id, user_text, spoken)
+            # If a report was recently generated, always surface its URLs
+            last_urls = self._memory.get_last_report_urls(session_id) if session_id else {}
             return {
-                "status":           "success",
+                "status": "success",
                 "ai_response_text": spoken,
                 "confidence_score": float(raw_output.get("confidence_score", 1.0)),
-                "data":             raw_output,
+                "data": raw_output,
+                "download_url": last_urls.get("download_url"),
+                "pptx_url": last_urls.get("pptx_url"),
             }
 
         if agent.agent_type() == "report" and session_id:
@@ -126,27 +135,39 @@ class OrchestratorAgent:
             self._memory.add_turn(session_id, user_text, agent_output.text)
 
         result = {
-            "status":           "success",
+            "status": "success",
             "ai_response_text": agent_output.text,
             "confidence_score": agent_output.confidence,
-            "data":             agent_output.data,
+            "data": agent_output.data,
         }
 
         if agent.agent_type() == "report" and session_id:
-            # Always fill defaults and generate immediately — no slot loop
-            slots = self._memory.get_slots(session_id)
-            if not slots.get("topic"):
-                facts = self._memory.get_facts(session_id)
-                topic = (
-                    facts.get("project") or facts.get("business") or
-                    facts.get("topic") or facts.get("name") or "General Report"
+            missing_slots = self._memory.missing_slots(session_id)
+            if missing_slots:
+                _log.info(
+                    "[Orchestrator] report_slots_incomplete session=%s missing_slots=%s",
+                    session_id,
+                    missing_slots,
                 )
-                self._memory.update_slot(session_id, "topic", topic)
-            if not slots.get("page_count"):
-                self._memory.update_slot(session_id, "page_count", 3)
-            if not slots.get("output_format"):
-                self._memory.update_slot(session_id, "output_format", "PDF")
+                result.setdefault("data", {})
+                result["data"]["missing_slots"] = missing_slots
+                return result
+
+            _log.info(
+                "[Orchestrator] report_slots_complete session=%s",
+                session_id,
+            )
+            _log.info(
+                "[Orchestrator] report_generation_started session=%s",
+                session_id,
+            )
+
             result = await self._generate_report(result, session_id, user_id)
+
+            _log.info(
+                "[Orchestrator] report_generation_completed session=%s",
+                session_id,
+            )
 
         return result
 
@@ -161,85 +182,35 @@ class OrchestratorAgent:
         )
         _log.info("[Orchestrator] approval_created id=%s session=%s", approval.id, session_id)
         return {
-            "status":           "pending_approval",
+            "status": "pending_approval",
             "ai_response_text": MSG_APPROVAL_PENDING,
             "confidence_score": 1.0,
-            "data":             {"approval_id": approval.id},
+            "data": {"approval_id": approval.id},
         }
 
     async def _generate_report(self, result: dict, session_id: str, user_id: str) -> dict:
-        slots          = self._memory.get_slots(session_id)
-        memory_context = self._memory.get_context_block(session_id)
-        full_history   = graph_repo.get_full_session_history(session_id)
-
-        turns_text = "\n".join(
-            f"User: {t.get('user_input', '')}\nAssistant: {t.get('ai_response_text', '')}"
-            for t in full_history
-        )
-        full_context = (
-            f"{memory_context}\n\n[COMPLETE CONVERSATION HISTORY]\n{turns_text}"
-            if full_history else memory_context
+        return await self._report_generation_service.generate(
+            result=result,
+            session_id=session_id,
+            user_id=user_id,
+            memory=self._memory,
         )
 
-        topic         = slots.get("topic", "Report")
-        page_count    = slots.get("page_count", 3)
-        output_format = slots.get("output_format", "PDF")
-        report_title  = result["data"].get("report_title") or topic
+    async def _resolve_agent(self, user_text: str, session_id: str = "") -> tuple[Optional[BaseAgent], Intent]:
+        if session_id and self._memory.is_report_in_progress(session_id):
+            agent = registry.get_by_type("report") or registry.get_active()
+            _log.info("[Orchestrator] REPORT_IN_PROGRESS bypass agent=%s",
+                      agent.agent_type() if agent else "NONE")
+            return agent, Intent.REPORT_REQUEST
 
-        gen_prompt = render(REPORT_GENERATION_PROMPT, {
-            "company":        COMPANY_NAME,
-            "topic":          topic,
-            "page_count":     str(page_count),
-            "output_format":  output_format,
-            "report_title":   report_title,
-            "memory_context": full_context,
-        })
-
-        from services.pipeline import VoicePipeline
-        gen_output = await VoicePipeline().execute(
-            system_prompt=gen_prompt,
-            model=get_model(),
-            temperature=LLM_TEMPERATURE,
-            max_tokens=REPORT_MAX_TOKENS,
-            history=[],
-            user_input=f"Generate a {page_count}-page {output_format} report on: {topic}",
-        )
-
-        sections = gen_output.get("sections") or []
-        if not sections:
-            _log.error("[Orchestrator] report LLM returned no sections session=%s", session_id)
-            result["ai_response_text"] = "Sorry, I could not generate the report. Please try again."
-            return result
-
-        report_data = {
-            **gen_output,
-            "report_title":    gen_output.get("report_title") or report_title,
-            "structured_data": gen_output.get("structured_data") or [
-                {"item": "Topic",  "value": topic},
-                {"item": "Pages",  "value": str(page_count)},
-                {"item": "Format", "value": output_format},
-            ],
-            "ai_summary": gen_output.get("ai_summary") or f"Report on {topic}.",
-        }
-
-        tool_urls = ToolExecutorService.execute(output_format, report_data, session_id)
-        self._memory.clear_slots(session_id)
-        _log.info("[Orchestrator] report_generated session=%s urls=%s", session_id, tool_urls)
-
-        result["status"]           = "success"
-        result["ai_response_text"] = gen_output.get("ai_response_text") or "Your report has been generated."
-        result["data"]             = {**result["data"], **tool_urls}
-        result["download_url"]     = tool_urls.get("download_url")
-        result["pptx_url"]         = tool_urls.get("pptx_url")
-        return result
-
-    def _resolve_agent(self, user_text: str, session_id: str = "") -> Optional[BaseAgent]:
-        intent   = IntentClassifier.classify(user_text)
+        intent = await IntentClassifier.classify_async(user_text)
         type_map = {
             Intent.RESTRICTED_REQUEST: "compliance",
-            Intent.REPORT_REQUEST:     "report",
+            Intent.REPORT_REQUEST: "report",
         }
         agent_type = type_map.get(intent, "voice")
-        agent      = registry.get_by_type(agent_type) or registry.get_active()
-        _log.info("[Orchestrator] intent=%s agent=%s", intent.value, agent.agent_type() if agent else "NONE")
-        return agent
+        agent = registry.get_by_type(agent_type) or registry.get_active()
+        _log.info("[Orchestrator] intent=%s agent=%s",
+                  intent.value, agent.agent_type() if agent else "NONE")
+        return agent, intent
+

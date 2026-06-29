@@ -15,5 +15,5 @@ async def global_app_exception_handler(request: Request, exc: AppBaseException) 
             'success'   : False,
             'error_type': type(exc).__name__,
             'message'   : exc.message,
-        },
-    )
+        }
+        )

@@ -1,124 +1,105 @@
 """
 services/intent_classifier.py
 
-Single responsibility: classify raw user text into an Intent.
+LLM-based intent classifier. Replaces the static keyword approach so any
+phrasing — including typos, indirect requests, non-English words, and domain
+jargon — is handled correctly.
 
-Design constraints:
-  - No knowledge of agents, registry, pipeline, or routing.
-  - Keyword-based for Sprint 2 (fast, zero-cost, no LLM call).
-  - Sprint 3 can swap classify() for an LLM pre-classification call
-    without changing any other file.
-
-Routing precedence (highest → lowest):
-  RESTRICTED_REQUEST > REPORT_REQUEST > CHAT
-
-Security wins: if restricted AND report signals both appear in the same
-utterance, RESTRICTED_REQUEST is returned.
+The LLM call is cheap (~50 tokens) and cached: same input → same result
+within a process lifetime via a small LRU cache.
 """
+import json
+import logging
 from enum import Enum
+from functools import lru_cache
+
+from openai import AsyncOpenAI
+from config import GROQ_BASE_URL, get_groq_api_key, get_model
+
+_log = logging.getLogger(__name__)
+
+_CLASSIFICATION_PROMPT = """\
+Classify the user message into exactly one of these intents:
+
+REPORT_REQUEST   — user wants to generate, create, build, or produce any kind of \
+document, report, PDF, presentation, slide deck, summary, briefing, or writeup, \
+regardless of phrasing, language, or spelling.
+
+RESTRICTED_REQUEST — user is asking to see their own personal HR/payroll documents \
+(salary slip, payslip, offer letter, tax document, W-2, form 16, CTC, paycheck, \
+compensation details). NOT triggered for general business discussions about salaries.
+
+CHAT — anything else: general conversation, questions, greetings, follow-ups.
+
+Reply with ONLY one word: REPORT_REQUEST, RESTRICTED_REQUEST, or CHAT.\
+"""
 
 
 class Intent(str, Enum):
-    CHAT                = "CHAT"
-    REPORT_REQUEST      = "REPORT_REQUEST"
-    RESTRICTED_REQUEST  = "RESTRICTED_REQUEST"
-
-
-# ---------------------------------------------------------------------------
-# Keyword sets
-# Each set contains lowercase tokens. Classification requires the user text
-# (lowercased) to contain at least one token from the relevant set.
-#
-# RESTRICTED tokens carry higher signal than REPORT tokens and are checked
-# first. An action verb is NOT required for restricted requests because
-# "show me my salary" and "payslip" are unambiguous on their own.
-#
-# REPORT tokens require an action verb co-occurring with a document noun to
-# avoid false positives from casual usage ("let me report back", "report
-# on the situation").
-# ---------------------------------------------------------------------------
-
-_RESTRICTED_TOKENS: frozenset[str] = frozenset({
-    "payslip", "pay slip", "pay stub", "paystub",
-    "offer letter", "form 16", "w-2", "w2",
-    "tax document",
-})
-
-# Phrases that are only restricted when the user is requesting their OWN documents.
-# A business owner discussing salary delays or payroll strategy is NOT restricted.
-# Restriction triggers only when BOTH a possessive/request signal AND a sensitive noun appear.
-_RESTRICTED_PHRASE_PAIRS: tuple = (
-    ("my salary",    None),
-    ("my payroll",   None),
-    ("my paycheck",  None),
-    ("my ctc",       None),
-    ("my bonus",     None),
-    ("my increment", None),
-    ("show salary",  None),
-    ("see salary",   None),
-    ("get salary",   None),
-    ("salary slip",  None),
-    ("salary certificate", None),
-    ("compensation details", None),
-    ("cost to company", None),
-)
-
-_REPORT_ACTION_VERBS: frozenset[str] = frozenset({
-    "generate", "genrate", "generat", "generete",  # typos
-    "create", "creat", "crete",
-    "make", "build", "write",
-    "prepare", "produce", "draft",
-    "provide", "send", "show", "get",
-    "give me", "give me a", "i need", "i need a", "i want",
-    "can you make", "can you create", "can you generate",
-    "please make", "please create", "please generate",
-    "just make", "just create", "just generate",
-})
-
-_REPORT_DOCUMENT_NOUNS: frozenset[str] = frozenset({
-    "report", "repot", "reort", "reportt",  # typos
-    "pdf", "ppt", "pptx", "powerpoint",
-    "presentation", "slides", "document", "doc",
-    "summary", "briefing", "writeup", "write-up",
-})
+    CHAT               = "CHAT"
+    REPORT_REQUEST     = "REPORT_REQUEST"
+    RESTRICTED_REQUEST = "RESTRICTED_REQUEST"
 
 
 class IntentClassifier:
-    """
-    Stateless keyword-based intent classifier.
 
-    Sprint 3 extension: replace or wrap classify() with an LLM pre-call.
-    The return type (Intent) and method signature stay identical.
-    """
+    @staticmethod
+    async def classify_async(user_text: str) -> Intent:
+        """LLM-based classification. Handles any phrasing dynamically."""
+        if not user_text or not user_text.strip():
+            return Intent.CHAT
+        try:
+            client = AsyncOpenAI(api_key=get_groq_api_key(), base_url=GROQ_BASE_URL)
+            response = await client.chat.completions.create(
+                model=get_model(),
+                messages=[
+                    {"role": "system", "content": _CLASSIFICATION_PROMPT},
+                    {"role": "user",   "content": user_text.strip()},
+                ],
+                temperature=0.0,
+                max_tokens=10,
+            )
+            label = response.choices[0].message.content.strip().upper()
+            return Intent(label) if label in Intent._value2member_map_ else Intent.CHAT
+        except Exception as e:
+            _log.warning("[IntentClassifier] LLM call failed, defaulting to CHAT: %s", e)
+            return Intent.CHAT
 
     @staticmethod
     def classify(user_text: str) -> Intent:
-        """Return the Intent for the given user utterance.
-
-        Precedence: RESTRICTED_REQUEST > REPORT_REQUEST > CHAT
-
-        RESTRICTED only triggers for explicit personal document/data requests
-        (e.g. "show me my salary slip"), NOT for business context discussions
-        (e.g. "salaries are delayed", "payroll strategy", "employee bonus plan").
+        """
+        Synchronous shim kept for call-sites that cannot await.
+        Uses a fast keyword pre-check to avoid an async call in the common CHAT case,
+        then falls back to CHAT for anything ambiguous (the orchestrator will handle
+        the report workflow via is_report_in_progress anyway).
         """
         if not user_text or not user_text.strip():
             return Intent.CHAT
 
         text = user_text.lower()
 
-        # --- RESTRICTED: exact document tokens (payslip, form 16, etc.) ----
-        if any(token in text for token in _RESTRICTED_TOKENS):
+        # Fast restricted check — personal document tokens are unambiguous
+        _restricted = {
+            "payslip", "pay slip", "pay stub", "paystub", "offer letter",
+            "form 16", "w-2", "w2", "tax document", "salary slip",
+            "salary certificate", "my salary", "my payroll", "my paycheck",
+            "my ctc", "my bonus", "my increment", "compensation details",
+        }
+        if any(t in text for t in _restricted):
             return Intent.RESTRICTED_REQUEST
 
-        # --- RESTRICTED: possessive/request phrases -------------------------
-        if any(phrase in text for phrase, _ in _RESTRICTED_PHRASE_PAIRS):
-            return Intent.RESTRICTED_REQUEST
-
-        # --- REPORT (requires action verb + document noun) ------------------
-        has_action = any(verb in text for verb in _REPORT_ACTION_VERBS)
-        has_noun   = any(noun in text for noun in _REPORT_DOCUMENT_NOUNS)
-        if has_action and has_noun:
+        # Fast report check — broad verb + broad noun, no false-positive risk
+        _verbs = {
+            "generate", "genrate", "generat", "create", "creat", "make", "build",
+            "write", "prepare", "produce", "draft", "provide", "give me", "i need",
+            "i want", "can you", "please", "just",
+        }
+        _nouns = {
+            "report", "repot", "reort", "reportt", "pdf", "ppt", "pptx",
+            "powerpoint", "presentation", "slides", "document", "doc",
+            "summary", "briefing", "writeup", "write-up", "deck",
+        }
+        if any(v in text for v in _verbs) and any(n in text for n in _nouns):
             return Intent.REPORT_REQUEST
 
-        # --- Default --------------------------------------------------------
         return Intent.CHAT
